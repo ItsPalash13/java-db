@@ -1,0 +1,103 @@
+<<concrete>>
+DatabaseServer
+- networkModule: NetworkModule
++ start()
++ stop()
+
+
+<<interface>>
+NetworkModule
++ start()
++ stop()
+
+
+<<interface>>
+ServerSocket
+- port: int
++ accept(): ClientConnection
++ close()
+
+
+<<interface>>
+ClientConnection
+- id: ConnectionId
++ receive(): Request
++ send(response: Response)
++ close()
+
+
+<<interface>>
+Request
++ decode()
+
+
+<<interface>>
+Response
++ encode()
+
+
+<<concrete>>
+ConnectionId
+- value: String
+
+
+<<concrete>>
+TcpNetworkModule
+- serverSocket: ServerSocket
++ start()
++ stop()
+
+
+<<concrete>>
+TcpServerSocket
+- socket: java.net.ServerSocket
+- port: int
++ accept(): ClientConnection
++ close()
+
+
+<<concrete>>
+TcpClientConnection
+- socket: java.net.Socket
+- id: ConnectionId
++ receive(): Request
++ send(response: Response)
++ close()
+
+
+<<concrete>>
+TcpRequest
++ decode()
+
+
+<<concrete>>
+TcpResponse
++ encode()
+
+
+Relationship
+
+DatabaseServer
+      │
+      ▼
+NetworkModule
+      │
+      ▼
+ServerSocket
+      │
+      │ accept()
+      ▼
+ClientConnection
+      │
+      ├── receive()
+      │      ↓
+      │    Request  ◄── TcpRequest
+      │
+      └── send()
+             ↑
+          Response  ◄── TcpResponse
+
+Design note:
+DatabaseServer knows only NetworkModule.
+The network abstraction knows only ServerSocket / ClientConnection.
+java.net.Socket classes stay inside the TCP implementations.
