@@ -1,5 +1,7 @@
 package com.example.database.network.tcp;
 
+import com.example.database.engine.DefaultQueryEngine;
+import com.example.database.engine.QueryEngine;
 import com.example.database.network.NetworkModule;
 import com.example.database.server.DatabaseServer;
 import org.junit.jupiter.api.Test;
@@ -18,10 +20,11 @@ class TcpNetworkModuleTest {
 
     @Test
     void serverAcceptsRequestAndReturnsEncodedResponse() throws Exception {
+        QueryEngine queryEngine = new DefaultQueryEngine();
         TcpServerSocket serverSocket = new TcpServerSocket(0);
         int port = serverSocket.getPort();
-        NetworkModule networkModule = new TcpNetworkModule(serverSocket);
-        DatabaseServer server = new DatabaseServer(networkModule);
+        NetworkModule networkModule = new TcpNetworkModule(serverSocket, queryEngine);
+        DatabaseServer server = new DatabaseServer(networkModule, queryEngine);
         server.start();
 
         try (Socket socket = new Socket("127.0.0.1", port)) {

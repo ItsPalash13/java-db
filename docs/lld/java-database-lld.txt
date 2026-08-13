@@ -1,6 +1,7 @@
 <<concrete>>
 DatabaseServer
 - networkModule: NetworkModule
+- queryEngine: QueryEngine
 + start()
 + stop()
 
@@ -9,6 +10,25 @@ DatabaseServer
 NetworkModule
 + start()
 + stop()
+
+
+<<interface>>
+RequestHandler
++ handle(request: Request): Response
+
+
+<<concrete>>
+DefaultRequestHandler
+- queryEngine: QueryEngine
++ handle(request: Request): Response
+
+
+<<interface>>
+QueryEngine
+
+
+<<concrete>>
+DefaultQueryEngine
 
 
 <<interface>>
@@ -44,6 +64,7 @@ ConnectionId
 <<concrete>>
 TcpNetworkModule
 - serverSocket: ServerSocket
+- requestHandler: RequestHandler
 + start()
 + stop()
 
@@ -79,25 +100,15 @@ Relationship
 
 DatabaseServer
       │
-      ▼
-NetworkModule
-      │
-      ▼
-ServerSocket
-      │
-      │ accept()
-      ▼
-ClientConnection
-      │
-      ├── receive()
-      │      ↓
-      │    Request  ◄── TcpRequest
-      │
-      └── send()
-             ↑
-          Response  ◄── TcpResponse
+      ├── owns ▶ QueryEngine
+      └── owns ▶ NetworkModule
+                    │
+                    ├── creates/owns ▶ RequestHandler(queryEngine)
+                    └── ServerSocket → ClientConnection
 
 Design note:
-DatabaseServer knows only NetworkModule.
-The network abstraction knows only ServerSocket / ClientConnection.
+DatabaseServer owns NetworkModule and QueryEngine (constructor injection).
+NetworkModule owns RequestHandler.
+DatabaseServer passes QueryEngine into NetworkModule; NetworkModule assigns it to RequestHandler.
+RequestHandler bridges network and query engine (behavior not implemented yet).
 java.net.Socket classes stay inside the TCP implementations.

@@ -5,6 +5,7 @@ classDiagram
     class DatabaseServer {
         <<concrete>>
         -NetworkModule networkModule
+        -QueryEngine queryEngine
         +start()
         +stop()
     }
@@ -13,6 +14,25 @@ classDiagram
         <<interface>>
         +start()
         +stop()
+    }
+
+    class RequestHandler {
+        <<interface>>
+        +handle(Request request) Response
+    }
+
+    class DefaultRequestHandler {
+        <<concrete>>
+        -QueryEngine queryEngine
+        +handle(Request request) Response
+    }
+
+    class QueryEngine {
+        <<interface>>
+    }
+
+    class DefaultQueryEngine {
+        <<concrete>>
     }
 
     class ServerSocket {
@@ -48,6 +68,7 @@ classDiagram
     class TcpNetworkModule {
         <<concrete>>
         -ServerSocket serverSocket
+        -RequestHandler requestHandler
         +start()
         +stop()
     }
@@ -80,7 +101,15 @@ classDiagram
     }
 
     DatabaseServer --> NetworkModule : networkModule
+    DatabaseServer --> QueryEngine : queryEngine
+
     NetworkModule <|.. TcpNetworkModule
+    RequestHandler <|.. DefaultRequestHandler
+    QueryEngine <|.. DefaultQueryEngine
+
+    TcpNetworkModule --> RequestHandler : owns
+    DefaultRequestHandler --> QueryEngine : queryEngine
+
     ServerSocket <|.. TcpServerSocket
     ClientConnection <|.. TcpClientConnection
     Request <|.. TcpRequest

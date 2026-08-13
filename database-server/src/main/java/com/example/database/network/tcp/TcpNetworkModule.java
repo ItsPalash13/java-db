@@ -1,5 +1,8 @@
 package com.example.database.network.tcp;
 
+import com.example.database.engine.QueryEngine;
+import com.example.database.network.requesthandler.DefaultRequestHandler;
+import com.example.database.network.requesthandler.RequestHandler;
 import com.example.database.network.ClientConnection;
 import com.example.database.network.NetworkModule;
 import com.example.database.network.Request;
@@ -17,13 +20,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class TcpNetworkModule implements NetworkModule {
 
     private final ServerSocket serverSocket;
+    private final RequestHandler requestHandler;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ExecutorService workers = Executors.newCachedThreadPool(namedFactory("db-conn"));
 
     private Thread acceptThread;
 
-    public TcpNetworkModule(ServerSocket serverSocket) {
+    public TcpNetworkModule(ServerSocket serverSocket, QueryEngine queryEngine) {
         this.serverSocket = serverSocket;
+        this.requestHandler = new DefaultRequestHandler(queryEngine);
     }
 
     @Override
