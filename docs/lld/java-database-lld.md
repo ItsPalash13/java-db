@@ -36,9 +36,46 @@ classDiagram
 
     class DefaultQueryEngine {
         <<concrete>>
+        -QueryLexer lexer
+        -QueryParser parser
         +start()
         +stop()
         +execute(String query) String
+    }
+
+    class QueryLexer {
+        <<interface>>
+        +tokenize(String query) List~Token~
+    }
+
+    class DefaultQueryLexer {
+        <<concrete>>
+        +tokenize(String query) List~Token~
+    }
+
+    class TokenCatalog {
+        <<enumeration>>
+        EOF
+    }
+
+    class Token {
+        <<concrete>>
+        -TokenCatalog kind
+        -String lexeme
+    }
+
+    class QueryParser {
+        <<interface>>
+        +parse(List~Token~ tokens) AstNode
+    }
+
+    class DefaultQueryParser {
+        <<concrete>>
+        +parse(List~Token~ tokens) AstNode
+    }
+
+    class AstNode {
+        <<concrete>>
     }
 
     class ServerSocket {
@@ -112,9 +149,16 @@ classDiagram
     NetworkModule <|.. TcpNetworkModule
     RequestHandler <|.. DefaultRequestHandler
     QueryEngine <|.. DefaultQueryEngine
+    QueryLexer <|.. DefaultQueryLexer
+    QueryParser <|.. DefaultQueryParser
 
     TcpNetworkModule --> RequestHandler : owns
     DefaultRequestHandler --> QueryEngine : queryEngine
+    DefaultQueryEngine --> QueryLexer : owns
+    DefaultQueryEngine --> QueryParser : owns
+    QueryLexer ..> Token : produces
+    QueryParser ..> AstNode : produces
+    Token --> TokenCatalog : kind
 
     ServerSocket <|.. TcpServerSocket
     ClientConnection <|.. TcpClientConnection

@@ -32,9 +32,46 @@ QueryEngine
 
 <<concrete>>
 DefaultQueryEngine
+- lexer: QueryLexer
+- parser: QueryParser
 + start()
 + stop()
 + execute(query: String): String
+
+
+<<interface>>
+QueryLexer
++ tokenize(query: String): List<Token>
+
+
+<<concrete>>
+DefaultQueryLexer
++ tokenize(query: String): List<Token>
+
+
+<<enumeration>>
+TokenCatalog
+EOF
+
+
+<<concrete>>
+Token
+- kind: TokenCatalog
+- lexeme: String
+
+
+<<interface>>
+QueryParser
++ parse(tokens: List<Token>): AstNode
+
+
+<<concrete>>
+DefaultQueryParser
++ parse(tokens: List<Token>): AstNode
+
+
+<<concrete>>
+AstNode
 
 
 <<interface>>
@@ -107,6 +144,10 @@ Relationship
 DatabaseServer
       │
       ├── owns ▶ QueryEngine
+      │              │
+      │              └── DefaultQueryEngine coordinates
+      │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
+      │                        └── owns ▶ QueryParser → AstNode
       └── owns ▶ NetworkModule
                     │
                     ├── creates/owns ▶ RequestHandler(queryEngine)
@@ -115,6 +156,9 @@ DatabaseServer
 Design note:
 DatabaseServer owns NetworkModule and QueryEngine (constructor injection).
 NetworkModule owns RequestHandler.
+DefaultQueryEngine owns QueryLexer and QueryParser; execute() lexes then parses then echoes.
+Lexer types live under com.example.database.engine.lexer.
+Parser types live under com.example.database.engine.parser.
 DatabaseServer passes QueryEngine into NetworkModule; NetworkModule assigns it to RequestHandler.
-RequestHandler bridges network and query engine (behavior not implemented yet).
+RequestHandler bridges network and query engine.
 java.net.Socket classes stay inside the TCP implementations.
