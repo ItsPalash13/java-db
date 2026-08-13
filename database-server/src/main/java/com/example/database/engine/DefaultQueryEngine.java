@@ -3,7 +3,8 @@ package com.example.database.engine;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Default query engine stub — echoes the query for now.
+ * Default engine stub: echoes {@code OK <query>}.
+ * Swap at the composition root ({@code Main}) with any other {@link QueryEngine} implementation.
  */
 public final class DefaultQueryEngine implements QueryEngine {
 

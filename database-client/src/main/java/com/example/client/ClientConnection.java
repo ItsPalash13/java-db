@@ -10,6 +10,10 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
+/**
+ * Client-side TCP session using the same length-prefixed framing as the server
+ * ({@code [4-byte big-endian length][UTF-8 payload]}, max 1 MiB).
+ */
 public final class ClientConnection implements AutoCloseable {
 
     private static final int MAX_PAYLOAD_BYTES = 1_048_576;
@@ -41,6 +45,7 @@ public final class ClientConnection implements AutoCloseable {
         socket.close();
     }
 
+    /** @return payload, or {@code null} on clean EOF before a frame */
     private byte[] readFrame() throws IOException {
         byte[] lengthBytes = in.readNBytes(4);
         if (lengthBytes.length == 0) {

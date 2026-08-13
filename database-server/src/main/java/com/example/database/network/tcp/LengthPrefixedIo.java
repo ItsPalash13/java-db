@@ -6,6 +6,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 
+/**
+ * Shared framing for client and server TCP paths:
+ * {@code [4-byte big-endian length][payload bytes]}, max 1 MiB payload.
+ */
 final class LengthPrefixedIo {
 
     private static final int MAX_PAYLOAD_BYTES = 1_048_576;
@@ -13,6 +17,9 @@ final class LengthPrefixedIo {
     private LengthPrefixedIo() {
     }
 
+    /**
+     * @return payload bytes, or {@code null} if the stream is cleanly at EOF before a frame
+     */
     static byte[] readFrame(InputStream in) throws IOException {
         byte[] lengthBytes = in.readNBytes(4);
         if (lengthBytes.length == 0) {

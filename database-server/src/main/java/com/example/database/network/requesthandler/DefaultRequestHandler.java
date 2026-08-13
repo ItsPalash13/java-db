@@ -6,7 +6,7 @@ import com.example.database.network.Response;
 import com.example.database.network.tcp.TextResponse;
 
 /**
- * Bridges the network layer and the query engine.
+ * Default bridge: decode request → {@link QueryEngine#execute(String)} → {@link TextResponse}.
  */
 public final class DefaultRequestHandler implements RequestHandler {
 

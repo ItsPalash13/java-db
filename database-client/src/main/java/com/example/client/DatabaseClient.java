@@ -2,6 +2,9 @@ package com.example.client;
 
 import java.io.IOException;
 
+/**
+ * Thin client API: open a connection, send one request, read one response.
+ */
 public final class DatabaseClient implements AutoCloseable {
 
     private final ClientConnection connection;
@@ -10,6 +13,7 @@ public final class DatabaseClient implements AutoCloseable {
         this.connection = new ClientConnection(host, port);
     }
 
+    /** Request/response round-trip over the length-prefixed TCP protocol. */
     public String execute(String request) throws IOException {
         connection.send(request);
         return connection.receive();

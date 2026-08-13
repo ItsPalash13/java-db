@@ -16,6 +16,10 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+/**
+ * Integration smoke test: real TCP round-trip through handler + engine (echo stub).
+ * Uses port {@code 0} so the OS assigns an ephemeral listen port.
+ */
 class TcpNetworkModuleTest {
 
     @Test

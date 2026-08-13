@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
 /**
- * TCP response with a UTF-8 payload.
+ * Base TCP response that encodes a string payload as UTF-8 bytes for the length-prefixed frame.
  */
 public class TcpResponse implements Response {
 

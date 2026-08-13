@@ -18,6 +18,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * TCP {@link NetworkModule}: one accept thread plus a cached pool of per-connection workers.
+ * Owns {@link RequestHandler}; receives {@link QueryEngine} from the composition root and wires it in.
+ * <p>
+ * Daemon threads so process lifetime stays with {@code Main} / explicit {@link #stop()}.
+ */
 public final class TcpNetworkModule implements NetworkModule {
 
     private final ServerSocket serverSocket;
@@ -27,6 +33,10 @@ public final class TcpNetworkModule implements NetworkModule {
 
     private Thread acceptThread;
 
+    /**
+     * @param serverSocket already-bound listen socket (created outside so port/bind stay at the edge)
+     * @param queryEngine  shared engine instance owned by {@code DatabaseServer}
+     */
     public TcpNetworkModule(ServerSocket serverSocket, QueryEngine queryEngine) {
         this.serverSocket = serverSocket;
         this.requestHandler = new DefaultRequestHandler(queryEngine);
@@ -38,6 +48,7 @@ public final class TcpNetworkModule implements NetworkModule {
             return;
         }
         acceptThread = new Thread(this::acceptLoop, "db-accept");
+        // Daemon: must not keep the JVM alive by itself after Main exits.
         acceptThread.setDaemon(true);
         acceptThread.start();
         System.out.println("Network module listening on port " + serverSocket.getPort());
@@ -48,6 +59,7 @@ public final class TcpNetworkModule implements NetworkModule {
         if (!running.compareAndSet(true, false)) {
             return;
         }
+        // Closing the listen socket unblocks accept() in the kernel; interrupt alone is unreliable.
         closeQuietly(serverSocket);
         workers.shutdownNow();
         try {
@@ -60,6 +72,7 @@ public final class TcpNetworkModule implements NetworkModule {
         }
     }
 
+    /** Accept loop only; per-connection I/O and query work run on pool threads. */
     private void acceptLoop() {
         while (running.get()) {
             try {
@@ -69,10 +82,15 @@ public final class TcpNetworkModule implements NetworkModule {
                 if (running.get()) {
                     throw new UncheckedIOException("Failed to accept connection", e);
                 }
+                // IOException while !running is expected after close() during stop().
             }
         }
     }
 
+    /**
+     * One worker owns one connection for its lifetime: receive → handler → send, repeatedly.
+     * Handler and query engine run on this same thread (synchronous pipeline).
+     */
     private void handle(ClientConnection connection) {
         try {
             while (running.get()) {
@@ -82,7 +100,7 @@ public final class TcpNetworkModule implements NetworkModule {
                 connection.send(response);
             }
         } catch (IOException ignored) {
-            // peer closed or server is stopping
+            // Peer closed or socket closed during stop().
         } finally {
             closeQuietly(connection);
         }
@@ -101,7 +119,7 @@ public final class TcpNetworkModule implements NetworkModule {
         try {
             closeable.close();
         } catch (Exception ignored) {
-            // already closed
+            // Best-effort cleanup during shutdown races.
         }
     }
 }

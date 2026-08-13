@@ -2,6 +2,10 @@ package com.example.client;
 
 import java.io.IOException;
 
+/**
+ * CLI entry for the database client.
+ * Args: {@code [host] [port] [request]} — defaults {@code 127.0.0.1}, {@code 9090}, {@code PING}.
+ */
 public final class Main {
 
     private static final String DEFAULT_HOST = "127.0.0.1";

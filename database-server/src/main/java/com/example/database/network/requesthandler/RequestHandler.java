@@ -4,7 +4,8 @@ import com.example.database.network.Request;
 import com.example.database.network.Response;
 
 /**
- * Bridges the network layer and the query engine.
+ * Bridge between the network layer and {@link com.example.database.engine.QueryEngine}.
+ * Owned by {@link com.example.database.network.tcp.TcpNetworkModule}.
  */
 public interface RequestHandler {
 

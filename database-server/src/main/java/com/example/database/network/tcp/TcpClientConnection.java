@@ -13,6 +13,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 
+/**
+ * TCP client session using length-prefixed frames ({@link LengthPrefixedIo}).
+ */
 public final class TcpClientConnection implements ClientConnection {
 
     private final Socket socket;
