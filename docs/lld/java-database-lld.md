@@ -53,8 +53,30 @@ classDiagram
         +tokenize(String query) List~Token~
     }
 
+    class LexException {
+        <<concrete>>
+        -int index
+        +index() int
+        +toResponse() String
+    }
+
     class TokenCatalog {
         <<enumeration>>
+        CREATE
+        DATABASE
+        TABLE
+        SELECT
+        UPDATE
+        DELETE
+        INSERT
+        IDENTIFIER
+        STRING
+        BOOLEAN
+        NUMBER
+        STAR
+        GT
+        LT
+        EQ
         EOF
     }
 
@@ -62,6 +84,7 @@ classDiagram
         <<concrete>>
         -TokenCatalog kind
         -String lexeme
+        -int index
     }
 
     class QueryParser {
@@ -157,6 +180,7 @@ classDiagram
     DefaultQueryEngine --> QueryLexer : owns
     DefaultQueryEngine --> QueryParser : owns
     QueryLexer ..> Token : produces
+    QueryLexer ..> LexException : throws
     QueryParser ..> AstNode : produces
     Token --> TokenCatalog : kind
 

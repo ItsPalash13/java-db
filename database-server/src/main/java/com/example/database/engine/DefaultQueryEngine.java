@@ -1,6 +1,7 @@
 package com.example.database.engine;
 
 import com.example.database.engine.lexer.DefaultQueryLexer;
+import com.example.database.engine.lexer.LexException;
 import com.example.database.engine.lexer.QueryLexer;
 import com.example.database.engine.lexer.Token;
 import com.example.database.engine.parser.AstNode;
@@ -13,7 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Default engine stub: lexes, parses, then echoes {@code OK <query>}.
  * Owns and coordinates {@link QueryLexer} and {@link QueryParser}.
- * Swap at the composition root ({@code Main}) with any other {@link QueryEngine}.
+ * Lex errors are returned as a response with the exact index.
  */
 public final class DefaultQueryEngine implements QueryEngine {
 
@@ -48,7 +49,14 @@ public final class DefaultQueryEngine implements QueryEngine {
             throw new IllegalStateException("QueryEngine is not started");
         }
         System.out.println("[QueryEngine] executing query: " + query);
-        List<Token> tokens = lexer.tokenize(query);
+        final List<Token> tokens;
+        try {
+            tokens = lexer.tokenize(query);
+        } catch (LexException e) {
+            String error = e.toResponse();
+            System.out.println("[QueryEngine] lex error: " + error);
+            return error;
+        }
         System.out.println("[QueryEngine] tokens: " + tokens);
         AstNode ast = parser.parse(tokens);
         System.out.println("[QueryEngine] ast: " + ast);

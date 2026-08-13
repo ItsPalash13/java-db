@@ -41,7 +41,7 @@ DefaultQueryEngine
 
 <<interface>>
 QueryLexer
-+ tokenize(query: String): List<Token>
++ tokenize(query: String): List<Token>  // throws LexException
 
 
 <<concrete>>
@@ -49,15 +49,27 @@ DefaultQueryLexer
 + tokenize(query: String): List<Token>
 
 
+<<concrete>>
+LexException
+- index: int
++ index(): int
++ toResponse(): String
+
+
 <<enumeration>>
 TokenCatalog
-EOF
+CREATE, DATABASE, TABLE, SELECT, UPDATE, DELETE, INSERT,
+INTO, FROM, SET, VALUES, WHERE,
+IDENTIFIER, STRING, BOOLEAN, NUMBER,
+STAR, GT, LT, GTE, LTE, EQ, NEQ, SLASH, PLUS, MINUS,
+COMMA, LPAREN, RPAREN, SEMICOLON, EOF
 
 
 <<concrete>>
 Token
 - kind: TokenCatalog
 - lexeme: String
+- index: int
 
 
 <<interface>>
@@ -157,6 +169,7 @@ Design note:
 DatabaseServer owns NetworkModule and QueryEngine (constructor injection).
 NetworkModule owns RequestHandler.
 DefaultQueryEngine owns QueryLexer and QueryParser; execute() lexes then parses then echoes.
+Lex errors become the response via LexException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.engine.lexer.
 Parser types live under com.example.database.engine.parser.
 DatabaseServer passes QueryEngine into NetworkModule; NetworkModule assigns it to RequestHandler.
