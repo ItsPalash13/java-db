@@ -3,9 +3,10 @@ package com.example.database.network.requesthandler;
 import com.example.database.engine.QueryEngine;
 import com.example.database.network.Request;
 import com.example.database.network.Response;
+import com.example.database.network.tcp.TextResponse;
 
 /**
- * Default request handler stub. Behavior not implemented yet.
+ * Bridges the network layer and the query engine.
  */
 public final class DefaultRequestHandler implements RequestHandler {
 
@@ -17,6 +18,12 @@ public final class DefaultRequestHandler implements RequestHandler {
 
     @Override
     public Response handle(Request request) {
-        throw new UnsupportedOperationException("not implemented");
+        System.out.println("[RequestHandler] checked request");
+        String decoded = request.decode();
+        System.out.println("[RequestHandler] decoded payload: " + decoded);
+        System.out.println("[RequestHandler] forwarding to QueryEngine");
+        String result = queryEngine.execute(decoded);
+        System.out.println("[RequestHandler] got result from QueryEngine");
+        return new TextResponse(result);
     }
 }

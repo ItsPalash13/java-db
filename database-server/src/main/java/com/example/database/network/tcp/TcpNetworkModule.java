@@ -6,6 +6,7 @@ import com.example.database.network.requesthandler.RequestHandler;
 import com.example.database.network.ClientConnection;
 import com.example.database.network.NetworkModule;
 import com.example.database.network.Request;
+import com.example.database.network.Response;
 import com.example.database.network.ServerSocket;
 
 import java.io.IOException;
@@ -76,7 +77,9 @@ public final class TcpNetworkModule implements NetworkModule {
         try {
             while (running.get()) {
                 Request request = connection.receive();
-                connection.send(new TcpResponse("OK " + request.decode()));
+                System.out.println("[NetworkModule] received request, dispatching to RequestHandler");
+                Response response = requestHandler.handle(request);
+                connection.send(response);
             }
         } catch (IOException ignored) {
             // peer closed or server is stopping
