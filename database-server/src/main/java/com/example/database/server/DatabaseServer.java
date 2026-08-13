@@ -14,10 +14,12 @@ public final class DatabaseServer {
     }
 
     public void start() {
+        queryEngine.start();
         networkModule.start();
     }
 
     public void stop() {
         networkModule.stop();
+        queryEngine.stop();
     }
 }

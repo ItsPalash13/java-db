@@ -29,10 +29,16 @@ classDiagram
 
     class QueryEngine {
         <<interface>>
+        +start()
+        +stop()
+        +execute(String query) String
     }
 
     class DefaultQueryEngine {
         <<concrete>>
+        +start()
+        +stop()
+        +execute(String query) String
     }
 
     class ServerSocket {

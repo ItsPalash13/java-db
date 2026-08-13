@@ -23,10 +23,11 @@ Main (composition root)
 ## Rules in force
 
 1. **`DatabaseServer`** owns `NetworkModule` + `QueryEngine` (constructor injection).
-2. **`NetworkModule` (`TcpNetworkModule`)** owns `RequestHandler`; builds `DefaultRequestHandler` with the injected `QueryEngine`.
-3. **`ServerSocket`** is created in `Main` and injected — network module depends on the `ServerSocket` interface, not on constructing TCP itself.
-4. **`RequestHandler`** lives under `com.example.database.network.requesthandler`.
-5. **`java.net.Socket` / `ServerSocket`** stay inside `network.tcp` implementations.
+2. **`QueryEngine`** has its own lifecycle: `DatabaseServer.start()` starts the engine **before** the network; `stop()` stops the network **before** the engine.
+3. **`NetworkModule` (`TcpNetworkModule`)** owns `RequestHandler`; builds `DefaultRequestHandler` with the injected `QueryEngine`.
+4. **`ServerSocket`** is created in `Main` and injected — network module depends on the `ServerSocket` interface, not on constructing TCP itself.
+5. **`RequestHandler`** lives under `com.example.database.network.requesthandler`.
+6. **`java.net.Socket` / `ServerSocket`** stay inside `network.tcp` implementations.
 
 ### Why `TcpServerSocket` is outside the module
 

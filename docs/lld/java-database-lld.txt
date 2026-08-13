@@ -25,10 +25,16 @@ DefaultRequestHandler
 
 <<interface>>
 QueryEngine
++ start()
++ stop()
++ execute(query: String): String
 
 
 <<concrete>>
 DefaultQueryEngine
++ start()
++ stop()
++ execute(query: String): String
 
 
 <<interface>>
