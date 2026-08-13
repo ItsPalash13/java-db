@@ -35,7 +35,7 @@ class TcpNetworkModuleTest {
             OutputStream out = new BufferedOutputStream(socket.getOutputStream());
             InputStream in = new BufferedInputStream(socket.getInputStream());
 
-            byte[] request = "SELECT 1".getBytes(StandardCharsets.UTF_8);
+            byte[] request = "SELECT * FROM t".getBytes(StandardCharsets.UTF_8);
             out.write(ByteBuffer.allocate(4).putInt(request.length).array());
             out.write(request);
             out.flush();
@@ -44,7 +44,7 @@ class TcpNetworkModuleTest {
             int length = ByteBuffer.wrap(lengthBytes).getInt();
             String response = new String(in.readNBytes(length), StandardCharsets.UTF_8);
 
-            assertEquals("OK SELECT 1", response);
+            assertEquals("OK SELECT * FROM t", response);
         } finally {
             server.stop();
         }

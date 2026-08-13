@@ -62,21 +62,14 @@ classDiagram
 
     class TokenCatalog {
         <<enumeration>>
-        CREATE
-        DATABASE
-        TABLE
         SELECT
         UPDATE
-        DELETE
         INSERT
+        DELETE
         IDENTIFIER
         STRING
         BOOLEAN
         NUMBER
-        STAR
-        GT
-        LT
-        EQ
         EOF
     }
 
@@ -94,10 +87,91 @@ classDiagram
 
     class DefaultQueryParser {
         <<concrete>>
+        -ParserRegistry registry
         +parse(List~Token~ tokens) AstNode
     }
 
+    class ParserRegistry {
+        <<concrete>>
+        +register(TokenCatalog, Parser)
+        +getParser(TokenCatalog) Parser
+    }
+
+    class Parser {
+        <<interface>>
+        +parse(TokenStream) AstNode
+    }
+
+    class SelectParser {
+        <<concrete>>
+    }
+
+    class UpdateParser {
+        <<concrete>>
+    }
+
+    class InsertParser {
+        <<concrete>>
+    }
+
+    class DeleteParser {
+        <<concrete>>
+    }
+
+    class CreateParser {
+        <<concrete>>
+    }
+
+    class TokenStream {
+        <<concrete>>
+        +peek() Token
+        +consume() Token
+        +expect(TokenCatalog) Token
+    }
+
+    class ParseException {
+        <<concrete>>
+        -int index
+        +toResponse() String
+    }
+
     class AstNode {
+        <<interface>>
+    }
+
+    class Query {
+        <<interface>>
+    }
+
+    class SelectQuery {
+        <<concrete>>
+    }
+
+    class UpdateQuery {
+        <<concrete>>
+    }
+
+    class InsertQuery {
+        <<concrete>>
+    }
+
+    class DeleteQuery {
+        <<concrete>>
+    }
+
+    class Expression {
+        <<interface>>
+    }
+
+    class ColumnExpression {
+        <<concrete>>
+    }
+
+    class LiteralExpression {
+        <<concrete>>
+    }
+
+    class BinaryExpression {
         <<concrete>>
     }
 
@@ -174,6 +248,11 @@ classDiagram
     QueryEngine <|.. DefaultQueryEngine
     QueryLexer <|.. DefaultQueryLexer
     QueryParser <|.. DefaultQueryParser
+    Parser <|.. SelectParser
+    Parser <|.. UpdateParser
+    Parser <|.. InsertParser
+    Parser <|.. DeleteParser
+    Parser <|.. CreateParser
 
     TcpNetworkModule --> RequestHandler : owns
     DefaultRequestHandler --> QueryEngine : queryEngine
@@ -181,7 +260,20 @@ classDiagram
     DefaultQueryEngine --> QueryParser : owns
     QueryLexer ..> Token : produces
     QueryLexer ..> LexException : throws
+    DefaultQueryParser --> ParserRegistry
+    ParserRegistry --> Parser
+    DefaultQueryParser ..> TokenStream
     QueryParser ..> AstNode : produces
+    QueryParser ..> ParseException : throws
+    AstNode <|-- Query
+    Query <|.. SelectQuery
+    Query <|.. UpdateQuery
+    Query <|.. InsertQuery
+    Query <|.. DeleteQuery
+    AstNode <|-- Expression
+    Expression <|.. ColumnExpression
+    Expression <|.. LiteralExpression
+    Expression <|.. BinaryExpression
     Token --> TokenCatalog : kind
 
     ServerSocket <|.. TcpServerSocket

@@ -79,11 +79,65 @@ QueryParser
 
 <<concrete>>
 DefaultQueryParser
+- registry: ParserRegistry
 + parse(tokens: List<Token>): AstNode
 
 
 <<concrete>>
+ParserRegistry
++ register(kind: TokenCatalog, parser: Parser)
++ getParser(kind: TokenCatalog): Parser
+
+
+<<interface>>
+Parser
++ parse(stream: TokenStream): AstNode
+
+
+<<concrete>>
+SelectParser / UpdateParser / InsertParser / DeleteParser / CreateParser
++ parse(stream: TokenStream): AstNode
+
+
+<<concrete>>
+TokenStream
++ peek(): Token
++ consume(): Token
++ match(kind: TokenCatalog): boolean
++ expect(kind: TokenCatalog): Token
+
+
+<<concrete>>
+ParseException
+- index: int
++ index(): int
++ toResponse(): String
+
+
+<<interface>>
 AstNode
+
+
+<<interface>>
+Query extends AstNode
+
+
+<<concrete>>
+SelectQuery / UpdateQuery / InsertQuery / DeleteQuery
+
+
+<<interface>>
+Expression extends AstNode
+
+
+<<concrete>>
+ColumnExpression / LiteralExpression / BinaryExpression
+
+
+<<concrete>>
+Assignment
+- column: String
+- value: Expression
 
 
 <<interface>>
@@ -159,7 +213,9 @@ DatabaseServer
       │              │
       │              └── DefaultQueryEngine coordinates
       │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
-      │                        └── owns ▶ QueryParser → AstNode
+      │                        └── owns ▶ QueryParser (DefaultQueryParser)
+      │                                      ├── ParserRegistry → Select/Update/Insert/Delete/CreateParser
+      │                                      └── AstNode (Query / Expression)
       └── owns ▶ NetworkModule
                     │
                     ├── creates/owns ▶ RequestHandler(queryEngine)
@@ -169,9 +225,10 @@ Design note:
 DatabaseServer owns NetworkModule and QueryEngine (constructor injection).
 NetworkModule owns RequestHandler.
 DefaultQueryEngine owns QueryLexer and QueryParser; execute() lexes then parses then echoes.
-Lex errors become the response via LexException.toResponse() (exact 0-based index).
-Lexer types live under com.example.database.engine.lexer.
+Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
+Lexer types live under com.example.database.engine.lexer (unchanged names).
 Parser types live under com.example.database.engine.parser.
+DefaultQueryParser dispatches via ParserRegistry; statement parsers own grammar; AST holds structure.
 DatabaseServer passes QueryEngine into NetworkModule; NetworkModule assigns it to RequestHandler.
 RequestHandler bridges network and query engine.
 java.net.Socket classes stay inside the TCP implementations.

@@ -3,12 +3,10 @@ package com.example.database.engine.parser;
 import com.example.database.engine.lexer.Token;
 import com.example.database.engine.parser.ast.AstNode;
 
-import java.util.List;
-
 /**
- * Turns a list of {@link Token}s into an {@link AstNode}.
+ * Parses one statement kind from a {@link TokenStream} into an {@link AstNode}.
  */
-public interface QueryParser {
+public interface Parser {
 
-    AstNode parse(List<Token> tokens);
+    AstNode parse(TokenStream stream);
 }
