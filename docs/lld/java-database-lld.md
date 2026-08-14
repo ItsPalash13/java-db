@@ -122,6 +122,14 @@ classDiagram
         <<concrete>>
     }
 
+    class AlterParser {
+        <<concrete>>
+    }
+
+    class DropParser {
+        <<concrete>>
+    }
+
     class TokenStream {
         <<concrete>>
         +peek() Token
@@ -253,6 +261,8 @@ classDiagram
     Parser <|.. InsertParser
     Parser <|.. DeleteParser
     Parser <|.. CreateParser
+    Parser <|.. AlterParser
+    Parser <|.. DropParser
 
     TcpNetworkModule --> RequestHandler : owns
     DefaultRequestHandler --> QueryEngine : queryEngine

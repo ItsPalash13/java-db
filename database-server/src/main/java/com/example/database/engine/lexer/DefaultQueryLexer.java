@@ -12,9 +12,15 @@ public final class DefaultQueryLexer implements QueryLexer {
 
     private static final Map<String, TokenCatalog> KEYWORDS = Map.ofEntries(
             Map.entry("CREATE", TokenCatalog.CREATE),
+            Map.entry("ALTER", TokenCatalog.ALTER),
+            Map.entry("DROP", TokenCatalog.DROP),
             Map.entry("DATABASE", TokenCatalog.DATABASE),
             Map.entry("DB", TokenCatalog.DATABASE),
             Map.entry("TABLE", TokenCatalog.TABLE),
+            Map.entry("INDEX", TokenCatalog.INDEX),
+            Map.entry("COLUMN", TokenCatalog.COLUMN),
+            Map.entry("ADD", TokenCatalog.ADD),
+            Map.entry("ON", TokenCatalog.ON),
             Map.entry("SELECT", TokenCatalog.SELECT),
             Map.entry("UPDATE", TokenCatalog.UPDATE),
             Map.entry("DELETE", TokenCatalog.DELETE),

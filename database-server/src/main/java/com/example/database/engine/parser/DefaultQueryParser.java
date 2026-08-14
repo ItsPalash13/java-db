@@ -3,8 +3,10 @@ package com.example.database.engine.parser;
 import com.example.database.engine.lexer.Token;
 import com.example.database.engine.lexer.TokenCatalog;
 import com.example.database.engine.parser.ast.AstNode;
+import com.example.database.engine.parser.statement.AlterParser;
 import com.example.database.engine.parser.statement.CreateParser;
 import com.example.database.engine.parser.statement.DeleteParser;
+import com.example.database.engine.parser.statement.DropParser;
 import com.example.database.engine.parser.statement.InsertParser;
 import com.example.database.engine.parser.statement.SelectParser;
 import com.example.database.engine.parser.statement.UpdateParser;
@@ -22,6 +24,8 @@ public final class DefaultQueryParser implements QueryParser {
     public DefaultQueryParser() {
         this.registry = new ParserRegistry();
         registry.register(TokenCatalog.CREATE, new CreateParser());
+        registry.register(TokenCatalog.ALTER, new AlterParser());
+        registry.register(TokenCatalog.DROP, new DropParser());
         registry.register(TokenCatalog.SELECT, new SelectParser());
         registry.register(TokenCatalog.UPDATE, new UpdateParser());
         registry.register(TokenCatalog.INSERT, new InsertParser());

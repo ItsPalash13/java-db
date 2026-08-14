@@ -29,6 +29,8 @@ public final class Main {
         NetworkModule networkModule = new TcpNetworkModule(serverSocket, queryEngine);
         DatabaseServer server = new DatabaseServer(networkModule, queryEngine);
 
+        // Register before start so Ctrl+C / SIGTERM still tears down if start fails partway.
+        // Hook runs on JVM shutdown (not kill -9); closes network then engine via server.stop().
         Runtime.getRuntime().addShutdownHook(new Thread(server::stop, "db-shutdown"));
         server.start();
         // Keep the non-daemon main thread alive; accept/worker threads are daemon.

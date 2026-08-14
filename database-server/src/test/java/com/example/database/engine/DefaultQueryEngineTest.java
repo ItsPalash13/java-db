@@ -56,7 +56,7 @@ class DefaultQueryEngineTest {
     }
 
     @Test
-    void executeReturnsOkForCreateInsertUpdateDelete() {
+    void executeReturnsOkForCreateAlterDropInsertUpdateDelete() {
         DefaultQueryEngine engine = new DefaultQueryEngine();
         engine.start();
         try {
@@ -65,6 +65,16 @@ class DefaultQueryEngineTest {
                     "OK CREATE TABLE users (id, name)",
                     engine.execute("CREATE TABLE users (id, name)")
             );
+            assertEquals(
+                    "OK CREATE INDEX idx ON users (id)",
+                    engine.execute("CREATE INDEX idx ON users (id)")
+            );
+            assertEquals(
+                    "OK ALTER TABLE users ADD age",
+                    engine.execute("ALTER TABLE users ADD age")
+            );
+            assertEquals("OK DROP INDEX idx", engine.execute("DROP INDEX idx"));
+            assertEquals("OK DROP TABLE users", engine.execute("DROP TABLE users"));
             assertEquals("OK INSERT INTO t VALUES (1)", engine.execute("INSERT INTO t VALUES (1)"));
             assertEquals("OK UPDATE t SET a = 1", engine.execute("UPDATE t SET a = 1"));
             assertEquals("OK DELETE FROM t", engine.execute("DELETE FROM t"));

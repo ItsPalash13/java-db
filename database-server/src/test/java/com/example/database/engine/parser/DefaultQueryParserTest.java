@@ -7,9 +7,14 @@ import com.example.database.engine.parser.ast.AstNode;
 import com.example.database.engine.parser.ast.expr.BinaryExpression;
 import com.example.database.engine.parser.ast.expr.ColumnExpression;
 import com.example.database.engine.parser.ast.expr.LiteralExpression;
+import com.example.database.engine.parser.ast.query.AlterTableQuery;
 import com.example.database.engine.parser.ast.query.CreateDatabaseQuery;
+import com.example.database.engine.parser.ast.query.CreateIndexQuery;
 import com.example.database.engine.parser.ast.query.CreateTableQuery;
 import com.example.database.engine.parser.ast.query.DeleteQuery;
+import com.example.database.engine.parser.ast.query.DropDatabaseQuery;
+import com.example.database.engine.parser.ast.query.DropIndexQuery;
+import com.example.database.engine.parser.ast.query.DropTableQuery;
 import com.example.database.engine.parser.ast.query.InsertQuery;
 import com.example.database.engine.parser.ast.query.SelectQuery;
 import com.example.database.engine.parser.ast.query.UpdateQuery;
@@ -113,12 +118,45 @@ class DefaultQueryParserTest {
     }
 
     @Test
+    void parsesCreateIndex() {
+        CreateIndexQuery query = parseAs(
+                "CREATE INDEX idx_users ON users (id, name)",
+                CreateIndexQuery.class
+        );
+        assertEquals("idx_users", query.index());
+        assertEquals("users", query.table());
+        assertEquals(List.of("id", "name"), query.columns());
+    }
+
+    @Test
+    void parsesDropDatabaseTableIndex() {
+        assertEquals("mydb", parseAs("DROP DATABASE mydb", DropDatabaseQuery.class).name());
+        assertEquals("users", parseAs("DROP TABLE users", DropTableQuery.class).table());
+        assertEquals("idx_users", parseAs("DROP INDEX idx_users", DropIndexQuery.class).index());
+    }
+
+    @Test
+    void parsesAlterTableAddAndDropColumn() {
+        AlterTableQuery add = parseAs("ALTER TABLE users ADD age", AlterTableQuery.class);
+        assertEquals("users", add.table());
+        assertEquals(AlterTableQuery.Action.ADD_COLUMN, add.action());
+        assertEquals("age", add.column());
+
+        AlterTableQuery drop = parseAs(
+                "ALTER TABLE users DROP COLUMN age",
+                AlterTableQuery.class
+        );
+        assertEquals(AlterTableQuery.Action.DROP_COLUMN, drop.action());
+        assertEquals("age", drop.column());
+    }
+
+    @Test
     void rejectsCreateWithoutTarget() {
         List<Token> tokens = lexer.tokenize("CREATE users");
         ParseException ex = assertThrows(ParseException.class, () -> parser.parse(tokens));
         assertEquals(7, ex.index());
         assertEquals(
-                "ERROR at index 7: expected DATABASE or TABLE but found IDENTIFIER",
+                "ERROR at index 7: expected DATABASE, TABLE, or INDEX but found IDENTIFIER",
                 ex.toResponse()
         );
     }

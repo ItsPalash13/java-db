@@ -57,6 +57,49 @@ class DefaultQueryLexerTest {
     }
 
     @Test
+    void tokenizesCreateIndex() {
+        assertKinds(
+                "CREATE INDEX idx_users ON users (id, name)",
+                TokenCatalog.CREATE,
+                TokenCatalog.INDEX,
+                TokenCatalog.IDENTIFIER,
+                TokenCatalog.ON,
+                TokenCatalog.IDENTIFIER,
+                TokenCatalog.LPAREN,
+                TokenCatalog.IDENTIFIER,
+                TokenCatalog.COMMA,
+                TokenCatalog.IDENTIFIER,
+                TokenCatalog.RPAREN,
+                TokenCatalog.EOF
+        );
+    }
+
+    @Test
+    void tokenizesDropTable() {
+        assertKinds(
+                "DROP TABLE users",
+                TokenCatalog.DROP,
+                TokenCatalog.TABLE,
+                TokenCatalog.IDENTIFIER,
+                TokenCatalog.EOF
+        );
+    }
+
+    @Test
+    void tokenizesAlterTableAddColumn() {
+        assertKinds(
+                "ALTER TABLE users ADD COLUMN age",
+                TokenCatalog.ALTER,
+                TokenCatalog.TABLE,
+                TokenCatalog.IDENTIFIER,
+                TokenCatalog.ADD,
+                TokenCatalog.COLUMN,
+                TokenCatalog.IDENTIFIER,
+                TokenCatalog.EOF
+        );
+    }
+
+    @Test
     void tokenizesSelectStarFrom() {
         assertKinds(
                 "SELECT * FROM users",
@@ -269,6 +312,12 @@ class DefaultQueryLexerTest {
             "CREATE DATABASE app",
             "CREATE DB app",
             "CREATE TABLE t (a, b)",
+            "CREATE INDEX i ON t (a)",
+            "DROP TABLE t",
+            "DROP DATABASE app",
+            "DROP INDEX i",
+            "ALTER TABLE t ADD age",
+            "ALTER TABLE t DROP COLUMN age",
             "SELECT * FROM t",
             "SELECT a FROM t WHERE b = 1",
             "UPDATE t SET a = 1 WHERE b != 2",

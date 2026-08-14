@@ -58,7 +58,8 @@ LexException
 
 <<enumeration>>
 TokenCatalog
-CREATE, DATABASE, TABLE, SELECT, UPDATE, DELETE, INSERT,
+CREATE, ALTER, DROP, DATABASE, TABLE, INDEX, COLUMN, ADD, ON,
+SELECT, UPDATE, DELETE, INSERT,
 INTO, FROM, SET, VALUES, WHERE,
 IDENTIFIER, STRING, BOOLEAN, NUMBER,
 STAR, GT, LT, GTE, LTE, EQ, NEQ, SLASH, PLUS, MINUS,
@@ -95,7 +96,7 @@ Parser
 
 
 <<concrete>>
-SelectParser / UpdateParser / InsertParser / DeleteParser / CreateParser
+SelectParser / UpdateParser / InsertParser / DeleteParser / CreateParser / AlterParser / DropParser
 + parse(stream: TokenStream): AstNode
 
 
@@ -214,7 +215,7 @@ DatabaseServer
       │              └── DefaultQueryEngine coordinates
       │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
       │                        └── owns ▶ QueryParser (DefaultQueryParser)
-      │                                      ├── ParserRegistry → Select/Update/Insert/Delete/CreateParser
+      │                                      ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
       │                                      └── AstNode (Query / Expression)
       └── owns ▶ NetworkModule
                     │

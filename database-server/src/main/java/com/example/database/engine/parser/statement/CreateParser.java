@@ -7,6 +7,7 @@ import com.example.database.engine.parser.Parser;
 import com.example.database.engine.parser.TokenStream;
 import com.example.database.engine.parser.ast.AstNode;
 import com.example.database.engine.parser.ast.query.CreateDatabaseQuery;
+import com.example.database.engine.parser.ast.query.CreateIndexQuery;
 import com.example.database.engine.parser.ast.query.CreateTableQuery;
 
 import java.util.ArrayList;
@@ -15,6 +16,7 @@ import java.util.List;
 /**
  * CREATE DATABASE ident
  * CREATE TABLE ident (ident (, ident)*)
+ * CREATE INDEX ident ON ident (ident (, ident)*)
  */
 public final class CreateParser implements Parser {
 
@@ -30,19 +32,34 @@ public final class CreateParser implements Parser {
         if (stream.match(TokenCatalog.TABLE)) {
             String table = stream.expect(TokenCatalog.IDENTIFIER).lexeme();
             stream.expect(TokenCatalog.LPAREN);
-            List<String> columns = new ArrayList<>();
-            columns.add(stream.expect(TokenCatalog.IDENTIFIER).lexeme());
-            while (stream.match(TokenCatalog.COMMA)) {
-                columns.add(stream.expect(TokenCatalog.IDENTIFIER).lexeme());
-            }
+            List<String> columns = parseColumnList(stream);
             stream.expect(TokenCatalog.RPAREN);
             return new CreateTableQuery(table, columns);
+        }
+
+        if (stream.match(TokenCatalog.INDEX)) {
+            String index = stream.expect(TokenCatalog.IDENTIFIER).lexeme();
+            stream.expect(TokenCatalog.ON);
+            String table = stream.expect(TokenCatalog.IDENTIFIER).lexeme();
+            stream.expect(TokenCatalog.LPAREN);
+            List<String> columns = parseColumnList(stream);
+            stream.expect(TokenCatalog.RPAREN);
+            return new CreateIndexQuery(index, table, columns);
         }
 
         Token bad = stream.peek();
         throw new ParseException(
                 bad.index(),
-                "expected DATABASE or TABLE but found " + bad.kind()
+                "expected DATABASE, TABLE, or INDEX but found " + bad.kind()
         );
+    }
+
+    private static List<String> parseColumnList(TokenStream stream) {
+        List<String> columns = new ArrayList<>();
+        columns.add(stream.expect(TokenCatalog.IDENTIFIER).lexeme());
+        while (stream.match(TokenCatalog.COMMA)) {
+            columns.add(stream.expect(TokenCatalog.IDENTIFIER).lexeme());
+        }
+        return columns;
     }
 }

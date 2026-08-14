@@ -6,8 +6,14 @@ package com.example.database.engine.lexer;
 public enum TokenCatalog {
     // commands / keywords
     CREATE,
+    ALTER,
+    DROP,
     DATABASE,
     TABLE,
+    INDEX,
+    COLUMN,
+    ADD,
+    ON,
     SELECT,
     UPDATE,
     DELETE,

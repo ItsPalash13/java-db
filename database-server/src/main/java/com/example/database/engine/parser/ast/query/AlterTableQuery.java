@@ -1,0 +1,43 @@
+package com.example.database.engine.parser.ast.query;
+
+import com.example.database.engine.parser.ast.Query;
+
+import java.util.Objects;
+
+/**
+ * ALTER TABLE name ADD|DROP [COLUMN] column.
+ */
+public final class AlterTableQuery implements Query {
+
+    public enum Action {
+        ADD_COLUMN,
+        DROP_COLUMN
+    }
+
+    private final String table;
+    private final Action action;
+    private final String column;
+
+    public AlterTableQuery(String table, Action action, String column) {
+        this.table = Objects.requireNonNull(table, "table");
+        this.action = Objects.requireNonNull(action, "action");
+        this.column = Objects.requireNonNull(column, "column");
+    }
+
+    public String table() {
+        return table;
+    }
+
+    public Action action() {
+        return action;
+    }
+
+    public String column() {
+        return column;
+    }
+
+    @Override
+    public String toString() {
+        return "AlterTableQuery{table=" + table + ", action=" + action + ", column=" + column + "}";
+    }
+}
