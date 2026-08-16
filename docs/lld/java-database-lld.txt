@@ -1,5 +1,6 @@
 <<concrete>>
 DatabaseServer
+- storageEngine: StorageEngine
 - networkModule: NetworkModule
 - queryEngine: QueryEngine
 + start()
@@ -34,9 +35,40 @@ QueryEngine
 DefaultQueryEngine
 - lexer: QueryLexer
 - parser: QueryParser
+- storageEngine: StorageEngine
 + start()
 + stop()
 + execute(query: String): String
+
+
+<<interface>>
+StorageEngine
++ start()
++ stop()
++ dataDirectory(): DataDirectory
+
+
+<<concrete>>
+DefaultStorageEngine
+- dataDirectory: DataDirectory
++ start()
++ stop()
++ dataDirectory(): DataDirectory
+
+
+<<concrete>>
+DataDirectory
+- root: Path
++ defaults(): DataDirectory
++ root(): Path
++ ensureExists()
+
+
+<<concrete>>
+LaunchConfig
+- port: int
+- dataDir: Path
++ parse(args: String[]): LaunchConfig
 
 
 <<interface>>
@@ -210,22 +242,25 @@ Relationship
 
 DatabaseServer
       │
+      ├── owns ▶ StorageEngine  → DataDirectory
       ├── owns ▶ QueryEngine
       │              │
       │              └── DefaultQueryEngine coordinates
       │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
-      │                        └── owns ▶ QueryParser (DefaultQueryParser)
-      │                                      ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
-      │                                      └── AstNode (Query / Expression)
+      │                        ├── owns ▶ QueryParser (DefaultQueryParser)
+      │                        │              ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
+      │                        │              └── AstNode (Query / Expression)
+      │                        └── uses ▶ StorageEngine (shared)
       └── owns ▶ NetworkModule
                     │
                     ├── creates/owns ▶ RequestHandler(queryEngine)
                     └── ServerSocket → ClientConnection
 
 Design note:
-DatabaseServer owns NetworkModule and QueryEngine (constructor injection).
+DatabaseServer owns StorageEngine, NetworkModule, and QueryEngine (constructor injection).
 NetworkModule owns RequestHandler.
-DefaultQueryEngine owns QueryLexer and QueryParser; execute() lexes then parses then echoes.
+DefaultQueryEngine owns QueryLexer and QueryParser; uses StorageEngine (does not own its lifecycle).
+execute() lexes then parses then echoes.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.engine.lexer (unchanged names).
 Parser types live under com.example.database.engine.parser.

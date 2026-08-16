@@ -4,6 +4,7 @@ classDiagram
 
     class DatabaseServer {
         <<concrete>>
+        -StorageEngine storageEngine
         -NetworkModule networkModule
         -QueryEngine queryEngine
         +start()
@@ -38,9 +39,40 @@ classDiagram
         <<concrete>>
         -QueryLexer lexer
         -QueryParser parser
+        -StorageEngine storageEngine
         +start()
         +stop()
         +execute(String query) String
+    }
+
+    class StorageEngine {
+        <<interface>>
+        +start()
+        +stop()
+        +dataDirectory() DataDirectory
+    }
+
+    class DefaultStorageEngine {
+        <<concrete>>
+        -DataDirectory dataDirectory
+        +start()
+        +stop()
+        +dataDirectory() DataDirectory
+    }
+
+    class DataDirectory {
+        <<concrete>>
+        -Path root
+        +defaults() DataDirectory
+        +root() Path
+        +ensureExists()
+    }
+
+    class LaunchConfig {
+        <<concrete>>
+        -int port
+        -Path dataDir
+        +parse(String[] args) LaunchConfig
     }
 
     class QueryLexer {
@@ -248,12 +280,14 @@ classDiagram
         +encode()
     }
 
-    DatabaseServer --> NetworkModule : networkModule
-    DatabaseServer --> QueryEngine : queryEngine
+    DatabaseServer --> StorageEngine : owns
+    DatabaseServer --> NetworkModule : owns
+    DatabaseServer --> QueryEngine : owns
 
     NetworkModule <|.. TcpNetworkModule
     RequestHandler <|.. DefaultRequestHandler
     QueryEngine <|.. DefaultQueryEngine
+    StorageEngine <|.. DefaultStorageEngine
     QueryLexer <|.. DefaultQueryLexer
     QueryParser <|.. DefaultQueryParser
     Parser <|.. SelectParser
@@ -268,6 +302,8 @@ classDiagram
     DefaultRequestHandler --> QueryEngine : queryEngine
     DefaultQueryEngine --> QueryLexer : owns
     DefaultQueryEngine --> QueryParser : owns
+    DefaultQueryEngine --> StorageEngine : uses
+    DefaultStorageEngine --> DataDirectory : owns
     QueryLexer ..> Token : produces
     QueryLexer ..> LexException : throws
     DefaultQueryParser --> ParserRegistry

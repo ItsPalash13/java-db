@@ -8,24 +8,44 @@ import com.example.database.engine.parser.DefaultQueryParser;
 import com.example.database.engine.parser.ParseException;
 import com.example.database.engine.parser.QueryParser;
 import com.example.database.engine.parser.ast.AstNode;
+import com.example.database.storage.DataDirectory;
+import com.example.database.storage.DefaultStorageEngine;
+import com.example.database.storage.StorageEngine;
 
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Default engine stub: lexes, parses, then echoes {@code OK <query>}.
  * Owns and coordinates {@link QueryLexer} and {@link QueryParser}.
+ * Uses {@link StorageEngine} (shared; lifecycle owned by {@code DatabaseServer}).
  * Lex and parse errors are returned as a response with the exact index.
  */
 public final class DefaultQueryEngine implements QueryEngine {
 
     private final QueryLexer lexer;
     private final QueryParser parser;
+    private final StorageEngine storageEngine;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     public DefaultQueryEngine() {
+        this(new DefaultStorageEngine(DataDirectory.defaults()));
+    }
+
+    public DefaultQueryEngine(Path dataDir) {
+        this(new DefaultStorageEngine(new DataDirectory(dataDir)));
+    }
+
+    public DefaultQueryEngine(StorageEngine storageEngine) {
         this.lexer = new DefaultQueryLexer();
         this.parser = new DefaultQueryParser();
+        this.storageEngine = Objects.requireNonNull(storageEngine, "storageEngine");
+    }
+
+    public StorageEngine storageEngine() {
+        return storageEngine;
     }
 
     @Override

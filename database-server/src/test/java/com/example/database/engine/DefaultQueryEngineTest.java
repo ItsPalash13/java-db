@@ -1,15 +1,24 @@
 package com.example.database.engine;
 
+import com.example.database.storage.DataDirectory;
+import com.example.database.storage.DefaultStorageEngine;
+import com.example.database.storage.StorageEngine;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Path;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import org.junit.jupiter.api.Test;
 
 class DefaultQueryEngineTest {
 
+    @TempDir
+    Path dataDir;
+
     @Test
     void executeReturnsOkForValidQuery() {
-        DefaultQueryEngine engine = new DefaultQueryEngine();
-        engine.start();
+        DefaultQueryEngine engine = startedEngine();
         try {
             assertEquals("OK SELECT * FROM users", engine.execute("SELECT * FROM users"));
         } finally {
@@ -19,8 +28,7 @@ class DefaultQueryEngineTest {
 
     @Test
     void executeReturnsLexErrorWithExactIndex() {
-        DefaultQueryEngine engine = new DefaultQueryEngine();
-        engine.start();
+        DefaultQueryEngine engine = startedEngine();
         try {
             String response = engine.execute("SELECT @ bad");
             assertEquals("ERROR at index 7: unexpected character '@'", response);
@@ -31,8 +39,7 @@ class DefaultQueryEngineTest {
 
     @Test
     void executeReturnsLexErrorForUnclosedString() {
-        DefaultQueryEngine engine = new DefaultQueryEngine();
-        engine.start();
+        DefaultQueryEngine engine = startedEngine();
         try {
             String response = engine.execute("INSERT INTO t VALUES ('x");
             assertTrue(response.startsWith("ERROR at index "));
@@ -44,8 +51,7 @@ class DefaultQueryEngineTest {
 
     @Test
     void executeReturnsParseErrorWithExactIndex() {
-        DefaultQueryEngine engine = new DefaultQueryEngine();
-        engine.start();
+        DefaultQueryEngine engine = startedEngine();
         try {
             String response = engine.execute("CREATE TABLE users");
             assertTrue(response.contains("expected LPAREN"));
@@ -57,8 +63,7 @@ class DefaultQueryEngineTest {
 
     @Test
     void executeReturnsOkForCreateAlterDropInsertUpdateDelete() {
-        DefaultQueryEngine engine = new DefaultQueryEngine();
-        engine.start();
+        DefaultQueryEngine engine = startedEngine();
         try {
             assertEquals("OK CREATE DATABASE mydb", engine.execute("CREATE DATABASE mydb"));
             assertEquals(
@@ -81,5 +86,13 @@ class DefaultQueryEngineTest {
         } finally {
             engine.stop();
         }
+    }
+
+    private DefaultQueryEngine startedEngine() {
+        StorageEngine storage = new DefaultStorageEngine(new DataDirectory(dataDir));
+        storage.start();
+        DefaultQueryEngine engine = new DefaultQueryEngine(storage);
+        engine.start();
+        return engine;
     }
 }
