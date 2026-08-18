@@ -2,7 +2,7 @@
 DatabaseServer
 - storageEngine: StorageEngine
 - networkModule: NetworkModule
-- queryEngine: QueryEngine
+- queryProcessor: QueryProcessor
 + start()
 + stop()
 
@@ -20,24 +20,20 @@ RequestHandler
 
 <<concrete>>
 DefaultRequestHandler
-- queryEngine: QueryEngine
+- queryProcessor: QueryProcessor
 + handle(request: Request): Response
 
 
 <<interface>>
-QueryEngine
-+ start()
-+ stop()
+QueryProcessor
 + execute(query: String): String
 
 
 <<concrete>>
-DefaultQueryEngine
+DefaultQueryProcessor
 - lexer: QueryLexer
 - parser: QueryParser
 - storageEngine: StorageEngine
-+ start()
-+ stop()
 + execute(query: String): String
 
 
@@ -243,9 +239,9 @@ Relationship
 DatabaseServer
       │
       ├── owns ▶ StorageEngine  → DataDirectory
-      ├── owns ▶ QueryEngine
+      ├── uses ▶ QueryProcessor
       │              │
-      │              └── DefaultQueryEngine coordinates
+      │              └── DefaultQueryProcessor coordinates
       │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
       │                        ├── owns ▶ QueryParser (DefaultQueryParser)
       │                        │              ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
@@ -253,18 +249,18 @@ DatabaseServer
       │                        └── uses ▶ StorageEngine (shared)
       └── owns ▶ NetworkModule
                     │
-                    ├── creates/owns ▶ RequestHandler(queryEngine)
+                    ├── creates/owns ▶ RequestHandler(queryProcessor)
                     └── ServerSocket → ClientConnection
 
 Design note:
-DatabaseServer owns StorageEngine, NetworkModule, and QueryEngine (constructor injection).
+DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProcessor (no lifecycle).
 NetworkModule owns RequestHandler.
-DefaultQueryEngine owns QueryLexer and QueryParser; uses StorageEngine (does not own its lifecycle).
+DefaultQueryProcessor owns QueryLexer and QueryParser; uses StorageEngine (does not own its lifecycle).
 execute() lexes then parses then echoes.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
-Lexer types live under com.example.database.engine.lexer (unchanged names).
-Parser types live under com.example.database.engine.parser.
+Lexer types live under com.example.database.processor.lexer (unchanged names).
+Parser types live under com.example.database.processor.parser.
 DefaultQueryParser dispatches via ParserRegistry; statement parsers own grammar; AST holds structure.
-DatabaseServer passes QueryEngine into NetworkModule; NetworkModule assigns it to RequestHandler.
-RequestHandler bridges network and query engine.
+DatabaseServer passes QueryProcessor into NetworkModule; NetworkModule assigns it to RequestHandler.
+RequestHandler bridges network and query processor.
 java.net.Socket classes stay inside the TCP implementations.

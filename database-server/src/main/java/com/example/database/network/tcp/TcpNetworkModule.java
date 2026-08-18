@@ -1,6 +1,5 @@
 package com.example.database.network.tcp;
 
-import com.example.database.engine.QueryEngine;
 import com.example.database.network.requesthandler.DefaultRequestHandler;
 import com.example.database.network.requesthandler.RequestHandler;
 import com.example.database.network.ClientConnection;
@@ -8,6 +7,7 @@ import com.example.database.network.NetworkModule;
 import com.example.database.network.Request;
 import com.example.database.network.Response;
 import com.example.database.network.ServerSocket;
+import com.example.database.processor.QueryProcessor;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * TCP {@link NetworkModule}: one accept thread plus a cached pool of per-connection workers.
- * Owns {@link RequestHandler}; receives {@link QueryEngine} from the composition root and wires it in.
+ * Owns {@link RequestHandler}; receives {@link QueryProcessor} from the composition root and wires it in.
  * <p>
  * Daemon threads so process lifetime stays with {@code Main} / explicit {@link #stop()}.
  */
@@ -34,12 +34,12 @@ public final class TcpNetworkModule implements NetworkModule {
     private Thread acceptThread;
 
     /**
-     * @param serverSocket already-bound listen socket (created outside so port/bind stay at the edge)
-     * @param queryEngine  shared engine instance owned by {@code DatabaseServer}
+     * @param serverSocket   already-bound listen socket (created outside so port/bind stay at the edge)
+     * @param queryProcessor shared processor used by {@code DatabaseServer} (no lifecycle)
      */
-    public TcpNetworkModule(ServerSocket serverSocket, QueryEngine queryEngine) {
+    public TcpNetworkModule(ServerSocket serverSocket, QueryProcessor queryProcessor) {
         this.serverSocket = serverSocket;
-        this.requestHandler = new DefaultRequestHandler(queryEngine);
+        this.requestHandler = new DefaultRequestHandler(queryProcessor);
     }
 
     @Override
@@ -89,7 +89,7 @@ public final class TcpNetworkModule implements NetworkModule {
 
     /**
      * One worker owns one connection for its lifetime: receive → handler → send, repeatedly.
-     * Handler and query engine run on this same thread (synchronous pipeline).
+     * Handler and query processor run on this same thread (synchronous pipeline).
      */
     private void handle(ClientConnection connection) {
         try {

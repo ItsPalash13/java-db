@@ -6,7 +6,7 @@ classDiagram
         <<concrete>>
         -StorageEngine storageEngine
         -NetworkModule networkModule
-        -QueryEngine queryEngine
+        -QueryProcessor queryProcessor
         +start()
         +stop()
     }
@@ -24,24 +24,20 @@ classDiagram
 
     class DefaultRequestHandler {
         <<concrete>>
-        -QueryEngine queryEngine
+        -QueryProcessor queryProcessor
         +handle(Request request) Response
     }
 
-    class QueryEngine {
+    class QueryProcessor {
         <<interface>>
-        +start()
-        +stop()
         +execute(String query) String
     }
 
-    class DefaultQueryEngine {
+    class DefaultQueryProcessor {
         <<concrete>>
         -QueryLexer lexer
         -QueryParser parser
         -StorageEngine storageEngine
-        +start()
-        +stop()
         +execute(String query) String
     }
 
@@ -282,11 +278,11 @@ classDiagram
 
     DatabaseServer --> StorageEngine : owns
     DatabaseServer --> NetworkModule : owns
-    DatabaseServer --> QueryEngine : owns
+    DatabaseServer --> QueryProcessor : uses
 
     NetworkModule <|.. TcpNetworkModule
     RequestHandler <|.. DefaultRequestHandler
-    QueryEngine <|.. DefaultQueryEngine
+    QueryProcessor <|.. DefaultQueryProcessor
     StorageEngine <|.. DefaultStorageEngine
     QueryLexer <|.. DefaultQueryLexer
     QueryParser <|.. DefaultQueryParser
@@ -299,10 +295,10 @@ classDiagram
     Parser <|.. DropParser
 
     TcpNetworkModule --> RequestHandler : owns
-    DefaultRequestHandler --> QueryEngine : queryEngine
-    DefaultQueryEngine --> QueryLexer : owns
-    DefaultQueryEngine --> QueryParser : owns
-    DefaultQueryEngine --> StorageEngine : uses
+    DefaultRequestHandler --> QueryProcessor : queryProcessor
+    DefaultQueryProcessor --> QueryLexer : owns
+    DefaultQueryProcessor --> QueryParser : owns
+    DefaultQueryProcessor --> StorageEngine : uses
     DefaultStorageEngine --> DataDirectory : owns
     QueryLexer ..> Token : produces
     QueryLexer ..> LexException : throws

@@ -1,19 +1,19 @@
 package com.example.database.network.requesthandler;
 
-import com.example.database.engine.QueryEngine;
 import com.example.database.network.Request;
 import com.example.database.network.Response;
 import com.example.database.network.tcp.TextResponse;
+import com.example.database.processor.QueryProcessor;
 
 /**
- * Default bridge: decode request → {@link QueryEngine#execute(String)} → {@link TextResponse}.
+ * Default bridge: decode request → {@link QueryProcessor#execute(String)} → {@link TextResponse}.
  */
 public final class DefaultRequestHandler implements RequestHandler {
 
-    private final QueryEngine queryEngine;
+    private final QueryProcessor queryProcessor;
 
-    public DefaultRequestHandler(QueryEngine queryEngine) {
-        this.queryEngine = queryEngine;
+    public DefaultRequestHandler(QueryProcessor queryProcessor) {
+        this.queryProcessor = queryProcessor;
     }
 
     @Override
@@ -21,9 +21,9 @@ public final class DefaultRequestHandler implements RequestHandler {
         System.out.println("[RequestHandler] checked request");
         String decoded = request.decode();
         System.out.println("[RequestHandler] decoded payload: " + decoded);
-        System.out.println("[RequestHandler] forwarding to QueryEngine");
-        String result = queryEngine.execute(decoded);
-        System.out.println("[RequestHandler] got result from QueryEngine");
+        System.out.println("[RequestHandler] forwarding to QueryProcessor");
+        String result = queryProcessor.execute(decoded);
+        System.out.println("[RequestHandler] got result from QueryProcessor");
         return new TextResponse(result);
     }
 }

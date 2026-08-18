@@ -1,45 +1,44 @@
 package com.example.database.server;
 
-import com.example.database.engine.QueryEngine;
 import com.example.database.network.NetworkModule;
+import com.example.database.processor.QueryProcessor;
 import com.example.database.storage.StorageEngine;
 
 /**
  * Top-level server process coordinator.
- * Owns {@link StorageEngine}, {@link NetworkModule}, and {@link QueryEngine};
- * drives their lifecycles in the correct order.
+ * Owns {@link StorageEngine} and {@link NetworkModule} lifecycles.
+ * Uses {@link QueryProcessor} (no lifecycle) to run queries via the network stack.
  */
 public final class DatabaseServer {
 
     private final StorageEngine storageEngine;
     private final NetworkModule networkModule;
-    private final QueryEngine queryEngine;
+    private final QueryProcessor queryProcessor;
 
     public DatabaseServer(
             StorageEngine storageEngine,
             NetworkModule networkModule,
-            QueryEngine queryEngine
+            QueryProcessor queryProcessor
     ) {
         this.storageEngine = storageEngine;
         this.networkModule = networkModule;
-        this.queryEngine = queryEngine;
+        this.queryProcessor = queryProcessor;
     }
 
     /**
-     * Storage first so the store is ready, then the query engine, then the network.
+     * Storage first so the store is ready, then open the network.
+     * Query processor has no start/stop — it is used when requests arrive.
      */
     public void start() {
         storageEngine.start();
-        queryEngine.start();
         networkModule.start();
     }
 
     /**
-     * Network first so accept/receive stop, then the query engine, then storage.
+     * Network first so accept/receive stop, then storage.
      */
     public void stop() {
         networkModule.stop();
-        queryEngine.stop();
         storageEngine.stop();
     }
 }

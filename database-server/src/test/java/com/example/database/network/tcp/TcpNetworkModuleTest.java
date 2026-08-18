@@ -1,8 +1,8 @@
 package com.example.database.network.tcp;
 
-import com.example.database.engine.DefaultQueryEngine;
-import com.example.database.engine.QueryEngine;
 import com.example.database.network.NetworkModule;
+import com.example.database.processor.DefaultQueryProcessor;
+import com.example.database.processor.QueryProcessor;
 import com.example.database.server.DatabaseServer;
 import com.example.database.storage.DataDirectory;
 import com.example.database.storage.DefaultStorageEngine;
@@ -22,7 +22,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Integration smoke test: real TCP round-trip through handler + engine (echo stub).
+ * Integration smoke test: real TCP round-trip through handler + query processor (echo stub).
  * Uses port {@code 0} so the OS assigns an ephemeral listen port.
  */
 class TcpNetworkModuleTest {
@@ -33,11 +33,11 @@ class TcpNetworkModuleTest {
     @Test
     void serverAcceptsRequestAndReturnsEncodedResponse() throws Exception {
         StorageEngine storageEngine = new DefaultStorageEngine(new DataDirectory(dataDir));
-        QueryEngine queryEngine = new DefaultQueryEngine(storageEngine);
+        QueryProcessor queryProcessor = new DefaultQueryProcessor(storageEngine);
         TcpServerSocket serverSocket = new TcpServerSocket(0);
         int port = serverSocket.getPort();
-        NetworkModule networkModule = new TcpNetworkModule(serverSocket, queryEngine);
-        DatabaseServer server = new DatabaseServer(storageEngine, networkModule, queryEngine);
+        NetworkModule networkModule = new TcpNetworkModule(serverSocket, queryProcessor);
+        DatabaseServer server = new DatabaseServer(storageEngine, networkModule, queryProcessor);
         server.start();
 
         try (Socket socket = new Socket("127.0.0.1", port)) {
