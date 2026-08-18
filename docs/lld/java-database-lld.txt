@@ -42,6 +42,48 @@ StorageEngine
 + start()
 + stop()
 + dataDirectory(): DataDirectory
+owns (stubs, not wired): CatalogManager, TableStore, IndexStore,
+LockManager, TransactionManager, WALManager, BufferPool, PhysicalStorage
+
+
+<<interface>>
+CatalogManager
+owns table/schema metadata
+
+
+<<interface>>
+TableStore
+owns actual table data
+
+
+<<interface>>
+IndexStore
+owns indexes
+
+
+<<interface>>
+LockManager
+owns concurrency locks
+
+
+<<interface>>
+TransactionManager
+owns transaction lifecycle
+
+
+<<interface>>
+WALManager
+owns durable change logging
+
+
+<<interface>>
+BufferPool
+cached persistent blocks/pages
+
+
+<<interface>>
+PhysicalStorage
+performs actual physical persistence
 
 
 <<concrete>>
@@ -239,6 +281,9 @@ Relationship
 DatabaseServer
       │
       ├── owns ▶ StorageEngine  → DataDirectory
+      │              └── (later) CatalogManager, TableStore, IndexStore,
+      │                  LockManager, TransactionManager, WALManager,
+      │                  BufferPool, PhysicalStorage
       ├── uses ▶ QueryProcessor
       │              │
       │              └── DefaultQueryProcessor coordinates

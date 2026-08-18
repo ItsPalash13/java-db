@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Default storage stub: owns {@link DataDirectory} and creates the store root on {@link #start()}.
+ * Submodules (catalog, table store, …) are not wired yet.
  */
 public final class DefaultStorageEngine implements StorageEngine {
 

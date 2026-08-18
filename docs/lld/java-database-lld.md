@@ -48,6 +48,38 @@ classDiagram
         +dataDirectory() DataDirectory
     }
 
+    class CatalogManager {
+        <<interface>>
+    }
+
+    class TableStore {
+        <<interface>>
+    }
+
+    class IndexStore {
+        <<interface>>
+    }
+
+    class LockManager {
+        <<interface>>
+    }
+
+    class TransactionManager {
+        <<interface>>
+    }
+
+    class WALManager {
+        <<interface>>
+    }
+
+    class BufferPool {
+        <<interface>>
+    }
+
+    class PhysicalStorage {
+        <<interface>>
+    }
+
     class DefaultStorageEngine {
         <<concrete>>
         -DataDirectory dataDirectory
@@ -300,6 +332,14 @@ classDiagram
     DefaultQueryProcessor --> QueryParser : owns
     DefaultQueryProcessor --> StorageEngine : uses
     DefaultStorageEngine --> DataDirectory : owns
+    StorageEngine --> CatalogManager : owns
+    StorageEngine --> TableStore : owns
+    StorageEngine --> IndexStore : owns
+    StorageEngine --> LockManager : owns
+    StorageEngine --> TransactionManager : owns
+    StorageEngine --> WALManager : owns
+    StorageEngine --> BufferPool : owns
+    StorageEngine --> PhysicalStorage : owns
     QueryLexer ..> Token : produces
     QueryLexer ..> LexException : throws
     DefaultQueryParser --> ParserRegistry
