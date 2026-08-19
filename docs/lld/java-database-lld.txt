@@ -33,8 +33,19 @@ QueryProcessor
 DefaultQueryProcessor
 - lexer: QueryLexer
 - parser: QueryParser
+- analyser: QueryAnalyser
 - storageEngine: StorageEngine
 + execute(query: String): String
+
+
+<<interface>>
+QueryAnalyser
++ analyse(ast: AstNode): boolean
+
+
+<<concrete>>
+DefaultQueryAnalyser
++ analyse(ast: AstNode): boolean
 
 
 <<interface>>
@@ -289,6 +300,7 @@ DatabaseServer
       │              └── DefaultQueryProcessor coordinates
       │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
       │                        ├── owns ▶ QueryParser (DefaultQueryParser)
+      │                        ├── owns ▶ QueryAnalyser (DefaultQueryAnalyser; stub)
       │                        │              ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
       │                        │              └── AstNode (Query / Expression)
       │                        └── uses ▶ StorageEngine (shared)
@@ -300,7 +312,7 @@ DatabaseServer
 Design note:
 DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProcessor (no lifecycle).
 NetworkModule owns RequestHandler.
-DefaultQueryProcessor owns QueryLexer and QueryParser; uses StorageEngine (does not own its lifecycle).
+DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryAnalyser; uses StorageEngine (does not own its lifecycle).
 execute() lexes then parses then echoes.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.processor.lexer (unchanged names).

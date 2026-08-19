@@ -1,5 +1,7 @@
 package com.example.database.processor;
 
+import com.example.database.processor.analyser.DefaultQueryAnalyser;
+import com.example.database.processor.analyser.QueryAnalyser;
 import com.example.database.processor.lexer.DefaultQueryLexer;
 import com.example.database.processor.lexer.LexException;
 import com.example.database.processor.lexer.QueryLexer;
@@ -17,8 +19,8 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Default query processor stub: lexes, parses, then echoes {@code OK <query>}.
- * Owns and coordinates {@link QueryLexer} and {@link QueryParser}.
+ * Default query processor stub: lexes, parses, analyses, then echoes {@code OK <query>}.
+ * Owns and coordinates {@link QueryLexer}, {@link QueryParser}, and {@link QueryAnalyser}.
  * Uses {@link StorageEngine} (shared; lifecycle owned by {@code DatabaseServer}).
  * Lex and parse errors are returned as a response with the exact index.
  */
@@ -26,6 +28,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
 
     private final QueryLexer lexer;
     private final QueryParser parser;
+    private final QueryAnalyser analyser;
     private final StorageEngine storageEngine;
 
     public DefaultQueryProcessor() {
@@ -39,6 +42,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
     public DefaultQueryProcessor(StorageEngine storageEngine) {
         this.lexer = new DefaultQueryLexer();
         this.parser = new DefaultQueryParser();
+        this.analyser = new DefaultQueryAnalyser();
         this.storageEngine = Objects.requireNonNull(storageEngine, "storageEngine");
     }
 
@@ -67,6 +71,12 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             return error;
         }
         System.out.println("[QueryProcessor] ast: " + ast);
+        if (!analyser.analyse(ast)) {
+            String error = "ERROR: analysis failed";
+            System.out.println("[QueryProcessor] analyse error: " + error);
+            return error;
+        }
+        System.out.println("[QueryProcessor] analyse: ok");
         String result = "OK " + query;
         System.out.println("[QueryProcessor] result: " + result);
         return result;

@@ -37,8 +37,19 @@ classDiagram
         <<concrete>>
         -QueryLexer lexer
         -QueryParser parser
+        -QueryAnalyser analyser
         -StorageEngine storageEngine
         +execute(String query) String
+    }
+
+    class QueryAnalyser {
+        <<interface>>
+        +analyse(AstNode ast) boolean
+    }
+
+    class DefaultQueryAnalyser {
+        <<concrete>>
+        +analyse(AstNode ast) boolean
     }
 
     class StorageEngine {
@@ -330,7 +341,9 @@ classDiagram
     DefaultRequestHandler --> QueryProcessor : queryProcessor
     DefaultQueryProcessor --> QueryLexer : owns
     DefaultQueryProcessor --> QueryParser : owns
+    DefaultQueryProcessor --> QueryAnalyser : owns
     DefaultQueryProcessor --> StorageEngine : uses
+    QueryAnalyser <|.. DefaultQueryAnalyser
     DefaultStorageEngine --> DataDirectory : owns
     StorageEngine --> CatalogManager : owns
     StorageEngine --> TableStore : owns
