@@ -61,6 +61,46 @@ classDiagram
 
     class CatalogManager {
         <<interface>>
+        +getTable(String name) Optional~TableMetadata~
+        +tableExists(String name) boolean
+        +createTable(TableMetadata table) TableMetadata
+    }
+
+    class DefaultCatalogManager {
+        <<concrete>>
+        -Map~String, TableMetadata~ tablesByName
+        -int nextTableId
+        +getTable(String name) Optional~TableMetadata~
+        +tableExists(String name) boolean
+        +createTable(TableMetadata table) TableMetadata
+    }
+
+    class TableMetadata {
+        <<concrete>>
+        -OptionalInt tableId
+        -String name
+        -List~ColumnMetadata~ columns
+        +define(String name, List~ColumnMetadata~ columns) TableMetadata
+    }
+
+    class ColumnMetadata {
+        <<concrete>>
+        -OptionalInt columnId
+        -String name
+        -ColumnType type
+        -boolean nullable
+        +define(String name, ColumnType type) ColumnMetadata
+    }
+
+    class ColumnType {
+        <<enumeration>>
+        INT
+        VARCHAR
+        BOOLEAN
+    }
+
+    class CatalogException {
+        <<concrete>>
     }
 
     class TableStore {
@@ -346,6 +386,11 @@ classDiagram
     QueryAnalyser <|.. DefaultQueryAnalyser
     DefaultStorageEngine --> DataDirectory : owns
     StorageEngine --> CatalogManager : owns
+    CatalogManager <|.. DefaultCatalogManager
+    DefaultCatalogManager --> TableMetadata : stores
+    TableMetadata --> ColumnMetadata : columns
+    ColumnMetadata --> ColumnType : type
+    CatalogManager ..> CatalogException : throws
     StorageEngine --> TableStore : owns
     StorageEngine --> IndexStore : owns
     StorageEngine --> LockManager : owns

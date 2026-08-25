@@ -53,13 +53,56 @@ StorageEngine
 + start()
 + stop()
 + dataDirectory(): DataDirectory
-owns (stubs, not wired): CatalogManager, TableStore, IndexStore,
+owns: CatalogManager (implemented, not constructed in DefaultStorageEngine yet)
+owns (stubs, not wired): TableStore, IndexStore,
 LockManager, TransactionManager, WALManager, BufferPool, PhysicalStorage
 
 
 <<interface>>
 CatalogManager
-owns table/schema metadata
+owns table/schema metadata (single database, in-memory)
++ getTable(name: String): Optional<TableMetadata>
++ tableExists(name: String): boolean
++ createTable(table: TableMetadata): TableMetadata
+    // assigns tableId/columnId from 1; ignores incoming ids
+    // throws CatalogException: duplicate table, duplicate column, empty columns
+
+
+<<concrete>>
+DefaultCatalogManager
+- tablesByName: Map<String, TableMetadata>
+- nextTableId: int
++ getTable(name: String): Optional<TableMetadata>
++ tableExists(name: String): boolean
++ createTable(table: TableMetadata): TableMetadata
+
+
+<<concrete>>
+TableMetadata
+- tableId: OptionalInt   // empty until createTable assigns
+- name: String
+- columns: List<ColumnMetadata>
++ define(name, columns): TableMetadata
+
+
+<<concrete>>
+ColumnMetadata
+- columnId: OptionalInt   // empty until createTable assigns
+- name: String
+- type: ColumnType
+- nullable: boolean       // define() defaults true
++ define(name, type): ColumnMetadata
++ define(name, type, nullable): ColumnMetadata
+
+
+<<enumeration>>
+ColumnType
+INT, VARCHAR, BOOLEAN
+
+
+<<concrete>>
+CatalogException extends RuntimeException
+duplicate table / duplicate column / empty column list
 
 
 <<interface>>
@@ -292,7 +335,10 @@ Relationship
 DatabaseServer
       │
       ├── owns ▶ StorageEngine  → DataDirectory
-      │              └── (later) CatalogManager, TableStore, IndexStore,
+      │              ├── CatalogManager (owns; not constructed in DefaultStorageEngine yet)
+      │              │         └── DefaultCatalogManager
+      │              │               └── TableMetadata → ColumnMetadata → ColumnType
+      │              └── (later) TableStore, IndexStore,
       │                  LockManager, TransactionManager, WALManager,
       │                  BufferPool, PhysicalStorage
       ├── uses ▶ QueryProcessor
@@ -321,3 +367,9 @@ DefaultQueryParser dispatches via ParserRegistry; statement parsers own grammar;
 DatabaseServer passes QueryProcessor into NetworkModule; NetworkModule assigns it to RequestHandler.
 RequestHandler bridges network and query processor.
 java.net.Socket classes stay inside the TCP implementations.
+
+Catalog (Phase 1.1):
+CatalogManager is a StorageEngine submodule, not a DatabaseServer collaborator.
+DefaultCatalogManager is in-memory only; DefaultStorageEngine does not construct it yet (1.3 will).
+createTable assigns sequential table and column ids starting at 1.
+getTable is by name in a single implicit database. No CatalogStore / PhysicalStorage yet.
