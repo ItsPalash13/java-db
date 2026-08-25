@@ -117,6 +117,24 @@ class DefaultCatalogManagerTest {
         assertEquals(1, created.columns().get(0).columnId().orElseThrow());
     }
 
+    @Test
+    void restoreKeepsIdsAndContinuesAllocation() {
+        DefaultCatalogManager catalog = new DefaultCatalogManager();
+        catalog.replaceAll(List.of(new TableMetadata(
+                4,
+                "users",
+                List.of(new ColumnMetadata(1, "id", ColumnType.INT, true))
+        )));
+
+        assertEquals(4, catalog.getTable("users").orElseThrow().tableId().orElseThrow());
+
+        TableMetadata orders = catalog.createTable(TableMetadata.define(
+                "orders",
+                List.of(ColumnMetadata.define("id", ColumnType.INT))
+        ));
+        assertEquals(5, orders.tableId().orElseThrow());
+    }
+
     private static TableMetadata usersDefinition() {
         return TableMetadata.define(
                 "users",

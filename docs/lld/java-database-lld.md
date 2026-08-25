@@ -57,14 +57,18 @@ classDiagram
         +start()
         +stop()
         +dataDirectory() DataDirectory
+        +catalogManager() CatalogManager
     }
 
     class DefaultStorageEngine {
         <<concrete>>
         -DataDirectory dataDirectory
+        -PhysicalStorage physicalStorage
+        -DefaultCatalogManager catalogManager
         +start()
         +stop()
         +dataDirectory() DataDirectory
+        +catalogManager() CatalogManager
     }
 
     class DataDirectory {
@@ -112,15 +116,20 @@ classDiagram
         +getTable(String name) Optional~TableMetadata~
         +tableExists(String name) boolean
         +createTable(TableMetadata table) TableMetadata
+        +allTables() List~TableMetadata~
+        +load()
     }
 
     class DefaultCatalogManager {
         <<concrete>>
         -Map~String, TableMetadata~ tablesByName
+        -CatalogStore catalogStore
         -int nextTableId
         +getTable(String name) Optional~TableMetadata~
         +tableExists(String name) boolean
         +createTable(TableMetadata table) TableMetadata
+        +allTables() List~TableMetadata~
+        +load()
     }
 
     class TableMetadata {
@@ -149,6 +158,20 @@ classDiagram
 
     class CatalogException {
         <<concrete>>
+    }
+
+    class CatalogStore {
+        <<interface>>
+        +load() List~TableMetadata~
+        +saveAll(List~TableMetadata~ tables)
+        +saveTable(TableMetadata table)
+    }
+
+    class JsonCatalogStore {
+        <<concrete>>
+        +load() List~TableMetadata~
+        +saveAll(List~TableMetadata~ tables)
+        +saveTable(TableMetadata table)
     }
 
     class TableStore {
@@ -406,6 +429,9 @@ classDiagram
     TableMetadata --> ColumnMetadata : columns
     ColumnMetadata --> ColumnType : type
     CatalogManager ..> CatalogException : throws
+    CatalogManager --> CatalogStore : owns
+    CatalogStore <|.. JsonCatalogStore
+    JsonCatalogStore --> PhysicalStorage : uses
     QueryLexer <|.. DefaultQueryLexer
     QueryLexer ..> Token : produces
     QueryLexer ..> LexException : throws

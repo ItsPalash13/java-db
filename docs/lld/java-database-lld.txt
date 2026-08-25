@@ -53,29 +53,48 @@ StorageEngine
 + start()
 + stop()
 + dataDirectory(): DataDirectory
-owns: CatalogManager (implemented, not constructed in DefaultStorageEngine yet)
-owns: PhysicalStorage (implemented, not constructed in DefaultStorageEngine yet)
++ catalogManager(): CatalogManager   // requires start(); throws if not started
+owns (wired): CatalogManager, PhysicalStorage
 owns (stubs, not wired): TableStore, IndexStore,
 LockManager, TransactionManager, WALManager, BufferPool
 
 
 <<interface>>
 CatalogManager
-owns table/schema metadata (single database, in-memory)
+owns table/schema metadata (single database)
+owns CatalogStore (JSON persistence); callers never see catalog.json
 + getTable(name: String): Optional<TableMetadata>
 + tableExists(name: String): boolean
 + createTable(table: TableMetadata): TableMetadata
     // assigns tableId/columnId from 1; ignores incoming ids
+    // persists via owned CatalogStore when constructed with PhysicalStorage
     // throws CatalogException: duplicate table, duplicate column, empty columns
++ allTables(): List<TableMetadata>
++ load()
+    // start-up: store → memory; keeps stored ids; nextTableId = max+1
 
 
 <<concrete>>
 DefaultCatalogManager
 - tablesByName: Map<String, TableMetadata>
+- catalogStore: CatalogStore   // null in memory-only tests; JsonCatalogStore when given PhysicalStorage
 - nextTableId: int
-+ getTable(name: String): Optional<TableMetadata>
-+ tableExists(name: String): boolean
-+ createTable(table: TableMetadata): TableMetadata
++ getTable / tableExists / createTable / allTables / load
+
+
+<<interface>>
+CatalogStore
+catalog persistence (JSON); PhysicalStorage sees bytes only
++ load(): List<TableMetadata>          // empty if catalog.json missing
++ saveAll(tables: List<TableMetadata>) // rewrite whole file
++ saveTable(table: TableMetadata)      // upsert by name, then rewrite
+
+
+<<concrete>>
+JsonCatalogStore
+- physicalStorage: PhysicalStorage
+catalog file: catalog.json at DataDirectory root
++ load / saveAll / saveTable
 
 
 <<concrete>>
@@ -170,9 +189,12 @@ file not found / already exists / invalid offset / failed to read|write|delete|f
 <<concrete>>
 DefaultStorageEngine
 - dataDirectory: DataDirectory
-+ start()
+- physicalStorage: PhysicalStorage
+- catalogManager: DefaultCatalogManager
++ start()                 // ensureExists, catalogManager.load()
 + stop()
 + dataDirectory(): DataDirectory
++ catalogManager(): CatalogManager
 
 
 <<concrete>>
@@ -362,11 +384,13 @@ Relationship
 DatabaseServer
       │
       ├── owns ▶ StorageEngine  → DataDirectory
-      │              ├── CatalogManager (owns; not constructed in DefaultStorageEngine yet)
-      │              │         └── DefaultCatalogManager
-      │              │               └── TableMetadata → ColumnMetadata → ColumnType
-      │              ├── PhysicalStorage (owns; not constructed in DefaultStorageEngine yet)
+      │              ├── PhysicalStorage
       │              │         └── DefaultPhysicalStorage (uses DataDirectory)
+      │              ├── CatalogManager
+      │              │         └── DefaultCatalogManager
+      │              │               ├── CatalogStore (JsonCatalogStore, catalog.json)
+      │              │               │         └── uses PhysicalStorage
+      │              │               └── TableMetadata → ColumnMetadata → ColumnType
       │              └── (later) TableStore, IndexStore,
       │                  LockManager, TransactionManager, WALManager,
       │                  BufferPool
@@ -397,12 +421,13 @@ DatabaseServer passes QueryProcessor into NetworkModule; NetworkModule assigns i
 RequestHandler bridges network and query processor.
 java.net.Socket classes stay inside the TCP implementations.
 
-Catalog (Phase 1.1):
-CatalogManager is a StorageEngine submodule, not a DatabaseServer collaborator.
-DefaultCatalogManager is in-memory only; DefaultStorageEngine does not construct it yet (1.3 will).
-createTable assigns sequential table and column ids starting at 1.
-getTable is by name in a single implicit database. No CatalogStore yet.
+Catalog (Phase 1.1–1.3):
+CatalogManager is a StorageEngine submodule and owns CatalogStore.
+DefaultStorageEngine constructs PhysicalStorage and DefaultCatalogManager(physicalStorage).
+start() calls catalogManager.load() — the engine does not touch catalog.json.
+createTable assigns ids and rewrites catalog.json. Restart: new engine, start, getTable("users").
+CatalogStore owns JSON; PhysicalStorage owns bytes.
 
 PhysicalStorage (Phase 1.2):
 PhysicalStorage is a StorageEngine submodule. DefaultPhysicalStorage is filesystem bytes under DataDirectory.
-Not constructed by DefaultStorageEngine yet (1.3 will). No JSON, catalog, or page read/write APIs.
+No page read/write APIs. Catalog JSON is opaque bytes at this layer.
