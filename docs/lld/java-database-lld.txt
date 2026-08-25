@@ -54,8 +54,9 @@ StorageEngine
 + stop()
 + dataDirectory(): DataDirectory
 owns: CatalogManager (implemented, not constructed in DefaultStorageEngine yet)
+owns: PhysicalStorage (implemented, not constructed in DefaultStorageEngine yet)
 owns (stubs, not wired): TableStore, IndexStore,
-LockManager, TransactionManager, WALManager, BufferPool, PhysicalStorage
+LockManager, TransactionManager, WALManager, BufferPool
 
 
 <<interface>>
@@ -137,7 +138,33 @@ cached persistent blocks/pages
 
 <<interface>>
 PhysicalStorage
-performs actual physical persistence
+performs actual physical persistence (files, offsets, bytes)
+no catalog / JSON / SQL / WAL semantics
++ pageSize(): int
++ create(file: String)
++ delete(file: String)
++ exists(file: String): boolean
++ read(file: String): byte[]
++ write(file: String, bytes: byte[])
++ read(file: String, offset: long, length: int): byte[]
++ write(file: String, offset: long, bytes: byte[])
++ flush(file: String)
+    // file is a path relative to DataDirectory.root()
+    // whole-file read/write require the file to exist (create first)
+    // throws PhysicalStorageException: not found, already exists, invalid offset, I/O failure
+
+
+<<concrete>>
+DefaultPhysicalStorage
+- root: Path                    // DataDirectory.root()
+- pageSize: int                 // default 16 KiB; unused by catalog I/O
++ pageSize(): int
++ create / delete / exists / read / write / flush
+
+
+<<concrete>>
+PhysicalStorageException extends RuntimeException
+file not found / already exists / invalid offset / failed to read|write|delete|flush|create
 
 
 <<concrete>>
@@ -338,9 +365,11 @@ DatabaseServer
       │              ├── CatalogManager (owns; not constructed in DefaultStorageEngine yet)
       │              │         └── DefaultCatalogManager
       │              │               └── TableMetadata → ColumnMetadata → ColumnType
+      │              ├── PhysicalStorage (owns; not constructed in DefaultStorageEngine yet)
+      │              │         └── DefaultPhysicalStorage (uses DataDirectory)
       │              └── (later) TableStore, IndexStore,
       │                  LockManager, TransactionManager, WALManager,
-      │                  BufferPool, PhysicalStorage
+      │                  BufferPool
       ├── uses ▶ QueryProcessor
       │              │
       │              └── DefaultQueryProcessor coordinates
@@ -372,4 +401,8 @@ Catalog (Phase 1.1):
 CatalogManager is a StorageEngine submodule, not a DatabaseServer collaborator.
 DefaultCatalogManager is in-memory only; DefaultStorageEngine does not construct it yet (1.3 will).
 createTable assigns sequential table and column ids starting at 1.
-getTable is by name in a single implicit database. No CatalogStore / PhysicalStorage yet.
+getTable is by name in a single implicit database. No CatalogStore yet.
+
+PhysicalStorage (Phase 1.2):
+PhysicalStorage is a StorageEngine submodule. DefaultPhysicalStorage is filesystem bytes under DataDirectory.
+Not constructed by DefaultStorageEngine yet (1.3 will). No JSON, catalog, or page read/write APIs.

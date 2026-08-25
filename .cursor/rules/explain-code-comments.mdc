@@ -1,0 +1,30 @@
+---
+description: Comment why non-obvious code exists so the project is readable as a learning DB
+globs: **/*.java
+alwaysApply: true
+---
+
+# Explain why, not what
+
+This is a learning database. A reader should understand **why a line exists** without leaving the file.
+
+When writing or editing Java, add a short comment on non-obvious behavior: OS/Java APIs, invariants, error choices, and why this is *not* some other layer (WAL, transactions, catalog).
+
+Do **not** comment getters, setters, or restatements of the next line (`i++ // increment i`).
+
+Prefer one or two sentences above the block. Name the consequence (crash, data loss, security, layering).
+
+```java
+// BAD — restates the call
+channel.force(true);
+
+// GOOD — why this API, what the argument means, what this is not
+// write() can return after data is only in the OS cache; a crash would lose it.
+// force(true) requests a durable write of file contents and metadata (size).
+// This is not a transaction commit or WAL — only "persist this file now."
+channel.force(true);
+```
+
+Also comment: path/sandbox checks, why create-before-write, why offset vs whole-file I/O, why an exception is wrapped.
+
+Keep comments accurate. If you change the code, update the comment in the same edit.

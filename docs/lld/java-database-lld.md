@@ -59,6 +59,54 @@ classDiagram
         +dataDirectory() DataDirectory
     }
 
+    class DefaultStorageEngine {
+        <<concrete>>
+        -DataDirectory dataDirectory
+        +start()
+        +stop()
+        +dataDirectory() DataDirectory
+    }
+
+    class DataDirectory {
+        <<concrete>>
+        -Path root
+        +defaults() DataDirectory
+        +root() Path
+        +ensureExists()
+    }
+
+    class PhysicalStorage {
+        <<interface>>
+        +pageSize() int
+        +create(String file)
+        +delete(String file)
+        +exists(String file) boolean
+        +read(String file) byte[]
+        +write(String file, byte[] bytes)
+        +read(String file, long offset, int length) byte[]
+        +write(String file, long offset, byte[] bytes)
+        +flush(String file)
+    }
+
+    class DefaultPhysicalStorage {
+        <<concrete>>
+        -Path root
+        -int pageSize
+        +pageSize() int
+        +create(String file)
+        +delete(String file)
+        +exists(String file) boolean
+        +read(String file) byte[]
+        +write(String file, byte[] bytes)
+        +read(String file, long offset, int length) byte[]
+        +write(String file, long offset, byte[] bytes)
+        +flush(String file)
+    }
+
+    class PhysicalStorageException {
+        <<concrete>>
+    }
+
     class CatalogManager {
         <<interface>>
         +getTable(String name) Optional~TableMetadata~
@@ -125,26 +173,6 @@ classDiagram
 
     class BufferPool {
         <<interface>>
-    }
-
-    class PhysicalStorage {
-        <<interface>>
-    }
-
-    class DefaultStorageEngine {
-        <<concrete>>
-        -DataDirectory dataDirectory
-        +start()
-        +stop()
-        +dataDirectory() DataDirectory
-    }
-
-    class DataDirectory {
-        <<concrete>>
-        -Path root
-        +defaults() DataDirectory
-        +root() Path
-        +ensureExists()
     }
 
     class LaunchConfig {
@@ -367,7 +395,20 @@ classDiagram
     RequestHandler <|.. DefaultRequestHandler
     QueryProcessor <|.. DefaultQueryProcessor
     StorageEngine <|.. DefaultStorageEngine
+    DefaultStorageEngine --> DataDirectory : owns
+    StorageEngine --> PhysicalStorage : owns
+    PhysicalStorage <|.. DefaultPhysicalStorage
+    DefaultPhysicalStorage --> DataDirectory : uses
+    PhysicalStorage ..> PhysicalStorageException : throws
+    StorageEngine --> CatalogManager : owns
+    CatalogManager <|.. DefaultCatalogManager
+    DefaultCatalogManager --> TableMetadata : stores
+    TableMetadata --> ColumnMetadata : columns
+    ColumnMetadata --> ColumnType : type
+    CatalogManager ..> CatalogException : throws
     QueryLexer <|.. DefaultQueryLexer
+    QueryLexer ..> Token : produces
+    QueryLexer ..> LexException : throws
     QueryParser <|.. DefaultQueryParser
     Parser <|.. SelectParser
     Parser <|.. UpdateParser
@@ -384,22 +425,12 @@ classDiagram
     DefaultQueryProcessor --> QueryAnalyser : owns
     DefaultQueryProcessor --> StorageEngine : uses
     QueryAnalyser <|.. DefaultQueryAnalyser
-    DefaultStorageEngine --> DataDirectory : owns
-    StorageEngine --> CatalogManager : owns
-    CatalogManager <|.. DefaultCatalogManager
-    DefaultCatalogManager --> TableMetadata : stores
-    TableMetadata --> ColumnMetadata : columns
-    ColumnMetadata --> ColumnType : type
-    CatalogManager ..> CatalogException : throws
     StorageEngine --> TableStore : owns
     StorageEngine --> IndexStore : owns
     StorageEngine --> LockManager : owns
     StorageEngine --> TransactionManager : owns
     StorageEngine --> WALManager : owns
     StorageEngine --> BufferPool : owns
-    StorageEngine --> PhysicalStorage : owns
-    QueryLexer ..> Token : produces
-    QueryLexer ..> LexException : throws
     DefaultQueryParser --> ParserRegistry
     ParserRegistry --> Parser
     DefaultQueryParser ..> TokenStream
