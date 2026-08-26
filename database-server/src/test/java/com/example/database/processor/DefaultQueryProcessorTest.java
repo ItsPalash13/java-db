@@ -9,9 +9,11 @@ import com.example.database.storage.StorageEngine;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DefaultQueryProcessorTest {
@@ -69,9 +71,31 @@ class DefaultQueryProcessorTest {
     }
 
     @Test
+    void executeCreateAndDropDatabase() {
+        DefaultQueryProcessor processor = newProcessor();
+
+        assertEquals("OK", processor.execute("CREATE DATABASE shop"));
+        assertTrue(processor.storageEngine().catalogManager().databaseExists("shop"));
+        assertTrue(Files.isDirectory(dataDir.resolve("shop")));
+
+        assertEquals(
+                "ERROR: database already exists: shop",
+                processor.execute("CREATE DATABASE shop")
+        );
+
+        assertEquals("OK", processor.execute("DROP DATABASE shop"));
+        assertFalse(processor.storageEngine().catalogManager().databaseExists("shop"));
+        assertFalse(Files.isDirectory(dataDir.resolve("shop")));
+
+        assertEquals(
+                "ERROR: database does not exist: shop",
+                processor.execute("DROP DATABASE shop")
+        );
+    }
+
+    @Test
     void executeReturnsOkForUnresolvedCreateAlterDropInsertUpdateDelete() {
         DefaultQueryProcessor processor = newProcessor();
-        assertEquals("OK CREATE DATABASE mydb", processor.execute("CREATE DATABASE mydb"));
         assertEquals(
                 "OK CREATE INDEX idx ON users (id)",
                 processor.execute("CREATE INDEX idx ON users (id)")

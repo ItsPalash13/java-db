@@ -29,4 +29,20 @@ public interface PhysicalStorage {
 
     /** Request that buffered writes for this file reach durable storage. */
     void flush(String file);
+
+    /**
+     * Create {@code path} and parents as directories under the store root.
+     * Idempotent if the directory already exists.
+     */
+    void createDirectory(String path);
+
+    /**
+     * Delete an empty directory. Fails if missing or not empty.
+     */
+    void deleteDirectory(String path);
+
+    /**
+     * Immediate subdirectory names of {@code path}. Empty string lists the store root.
+     */
+    java.util.List<String> listDirectories(String path);
 }

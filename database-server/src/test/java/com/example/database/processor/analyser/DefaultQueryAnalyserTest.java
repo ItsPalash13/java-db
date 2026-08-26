@@ -2,7 +2,9 @@ package com.example.database.processor.analyser;
 
 import com.example.database.processor.parser.ast.ColumnDefinition;
 import com.example.database.processor.parser.ast.ColumnSqlType;
+import com.example.database.processor.parser.ast.query.CreateDatabaseQuery;
 import com.example.database.processor.parser.ast.query.CreateTableQuery;
+import com.example.database.processor.parser.ast.query.DropDatabaseQuery;
 import com.example.database.processor.parser.ast.query.SelectQuery;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.ColumnMetadata;
@@ -98,6 +100,59 @@ class DefaultQueryAnalyserTest {
                 analyser.analyse(select)
         );
         assertEquals(select, unresolved.source());
+    }
+
+    @Test
+    void acceptsCreateDatabaseWithoutMutatingCatalog() {
+        CatalogManager catalog = new DefaultCatalogManager();
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalyzedCreateDatabase analyzed = assertInstanceOf(
+                AnalyzedCreateDatabase.class,
+                analyser.analyse(new CreateDatabaseQuery("shop"))
+        );
+        assertEquals("shop", analyzed.database());
+        assertTrue(catalog.allDatabases().isEmpty());
+    }
+
+    @Test
+    void rejectsCreateDatabaseWhenNameExists() {
+        CatalogManager catalog = new DefaultCatalogManager();
+        catalog.createDatabase("shop");
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new CreateDatabaseQuery("shop"))
+        );
+        assertEquals("database already exists: shop", ex.getMessage());
+        assertEquals(1, catalog.allDatabases().size());
+    }
+
+    @Test
+    void acceptsDropDatabaseWhenNameExists() {
+        CatalogManager catalog = new DefaultCatalogManager();
+        catalog.createDatabase("shop");
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalyzedDropDatabase analyzed = assertInstanceOf(
+                AnalyzedDropDatabase.class,
+                analyser.analyse(new DropDatabaseQuery("shop"))
+        );
+        assertEquals("shop", analyzed.database());
+        assertEquals(List.of("shop"), catalog.allDatabases());
+    }
+
+    @Test
+    void rejectsDropDatabaseWhenMissing() {
+        CatalogManager catalog = new DefaultCatalogManager();
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new DropDatabaseQuery("shop"))
+        );
+        assertEquals("database does not exist: shop", ex.getMessage());
     }
 
     private static CreateTableQuery usersCreateTableQuery() {

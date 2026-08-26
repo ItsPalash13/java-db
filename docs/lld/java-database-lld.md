@@ -64,6 +64,16 @@ classDiagram
         -List~ColumnMetadata~ columns
     }
 
+    class AnalyzedCreateDatabase {
+        <<concrete>>
+        -String database
+    }
+
+    class AnalyzedDropDatabase {
+        <<concrete>>
+        -String database
+    }
+
     class UnresolvedQuery {
         <<concrete>>
         -AstNode source
@@ -77,6 +87,8 @@ classDiagram
     class QueryType {
         <<enumeration>>
         CREATE_TABLE
+        CREATE_DATABASE
+        DROP_DATABASE
         UNRESOLVED
     }
 
@@ -89,6 +101,16 @@ classDiagram
         <<concrete>>
         -String table
         -List~ColumnMetadata~ columns
+    }
+
+    class CreateDatabasePlan {
+        <<concrete>>
+        -String database
+    }
+
+    class DropDatabasePlan {
+        <<concrete>>
+        -String database
     }
 
     class UnresolvedPlan {
@@ -179,6 +201,9 @@ classDiagram
         +read(String file, long offset, int length) byte[]
         +write(String file, long offset, byte[] bytes)
         +flush(String file)
+        +createDirectory(String path)
+        +deleteDirectory(String path)
+        +listDirectories(String path) List~String~
     }
 
     class DefaultPhysicalStorage {
@@ -194,6 +219,9 @@ classDiagram
         +read(String file, long offset, int length) byte[]
         +write(String file, long offset, byte[] bytes)
         +flush(String file)
+        +createDirectory(String path)
+        +deleteDirectory(String path)
+        +listDirectories(String path) List~String~
     }
 
     class PhysicalStorageException {
@@ -206,18 +234,27 @@ classDiagram
         +tableExists(String name) boolean
         +createTable(TableMetadata table) TableMetadata
         +allTables() List~TableMetadata~
+        +databaseExists(String name) boolean
+        +allDatabases() List~String~
+        +createDatabase(String name)
+        +dropDatabase(String name)
         +load()
     }
 
     class DefaultCatalogManager {
         <<concrete>>
         -Map~String, TableMetadata~ tablesByName
+        -Set~String~ databaseNames
         -CatalogStore catalogStore
         -int nextTableId
         +getTable(String name) Optional~TableMetadata~
         +tableExists(String name) boolean
         +createTable(TableMetadata table) TableMetadata
         +allTables() List~TableMetadata~
+        +databaseExists(String name) boolean
+        +allDatabases() List~String~
+        +createDatabase(String name)
+        +dropDatabase(String name)
         +load()
     }
 
@@ -254,6 +291,9 @@ classDiagram
         +load() List~TableMetadata~
         +saveAll(List~TableMetadata~ tables)
         +saveTable(TableMetadata table)
+        +loadDatabases() List~String~
+        +createDatabase(String name)
+        +dropDatabase(String name)
     }
 
     class JsonCatalogStore {
@@ -261,6 +301,9 @@ classDiagram
         +load() List~TableMetadata~
         +saveAll(List~TableMetadata~ tables)
         +saveTable(TableMetadata table)
+        +loadDatabases() List~String~
+        +createDatabase(String name)
+        +dropDatabase(String name)
     }
 
     class TableStore {
@@ -565,20 +608,30 @@ classDiagram
     DefaultQueryAnalyser --> CatalogManager : reads
     QueryAnalyser <|.. DefaultQueryAnalyser
     AnalyzedQuery <|.. AnalyzedCreateTable
+    AnalyzedQuery <|.. AnalyzedCreateDatabase
+    AnalyzedQuery <|.. AnalyzedDropDatabase
     AnalyzedQuery <|.. UnresolvedQuery
     AnalyzedCreateTable --> ColumnMetadata : columns
     QueryPlanner <|.. DefaultQueryPlanner
     ExecutionPlan <|.. CreateTablePlan
+    ExecutionPlan <|.. CreateDatabasePlan
+    ExecutionPlan <|.. DropDatabasePlan
     ExecutionPlan <|.. UnresolvedPlan
     CreateTablePlan --> ColumnMetadata : columns
     CreateTablePlan --> QueryType
+    CreateDatabasePlan --> QueryType
+    DropDatabasePlan --> QueryType
     UnresolvedPlan --> UnresolvedQuery : source
     DefaultQueryPlanner ..> AnalyzedCreateTable
+    DefaultQueryPlanner ..> AnalyzedCreateDatabase
+    DefaultQueryPlanner ..> AnalyzedDropDatabase
     ExecutorService --> ExecutorRegistry
     ExecutorRegistry --> QueryExecutor
     QueryExecutor <|.. CommandExecutor
     CommandExecutor --> CatalogManager : writes
     CommandExecutor ..> CreateTablePlan
+    CommandExecutor ..> CreateDatabasePlan
+    CommandExecutor ..> DropDatabasePlan
     StorageEngine --> TableStore : owns
     StorageEngine --> IndexStore : owns
     StorageEngine --> LockManager : owns

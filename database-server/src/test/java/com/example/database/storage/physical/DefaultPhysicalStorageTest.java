@@ -7,6 +7,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -130,5 +131,45 @@ class DefaultPhysicalStorageTest {
         dataDirectory.ensureExists();
         DefaultPhysicalStorage paged = new DefaultPhysicalStorage(dataDirectory, 4096);
         assertEquals(4096, paged.pageSize());
+    }
+
+    @Test
+    void createListAndDeleteEmptyDirectory() {
+        storage.createDirectory("shop");
+        assertTrue(storage.exists("shop"));
+        assertEquals(List.of("shop"), storage.listDirectories(""));
+
+        storage.deleteDirectory("shop");
+        assertFalse(storage.exists("shop"));
+        assertTrue(storage.listDirectories("").isEmpty());
+    }
+
+    @Test
+    void listDirectoriesIgnoresFilesAtRoot() {
+        storage.create("catalog.json");
+        storage.createDirectory("shop");
+        assertEquals(List.of("shop"), storage.listDirectories(""));
+    }
+
+    @Test
+    void deleteDirectoryRejectsMissingAndNonEmpty() {
+        assertEquals(
+                "directory not found: missing",
+                assertThrows(PhysicalStorageException.class, () -> storage.deleteDirectory("missing")).getMessage()
+        );
+
+        storage.createDirectory("shop");
+        storage.create("shop/note.txt");
+        assertEquals(
+                "directory is not empty: shop",
+                assertThrows(PhysicalStorageException.class, () -> storage.deleteDirectory("shop")).getMessage()
+        );
+        assertTrue(storage.exists("shop"));
+    }
+
+    @Test
+    void directoryOpsRejectPathEscape() {
+        assertThrows(IllegalArgumentException.class, () -> storage.createDirectory("../outside"));
+        assertThrows(IllegalArgumentException.class, () -> storage.listDirectories(".."));
     }
 }

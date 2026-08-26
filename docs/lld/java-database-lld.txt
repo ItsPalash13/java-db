@@ -52,13 +52,23 @@ DefaultQueryAnalyser
 
 <<interface>>
 AnalyzedQuery
-<<sealed>> permits AnalyzedCreateTable, UnresolvedQuery
+<<sealed>> permits AnalyzedCreateTable, AnalyzedCreateDatabase, AnalyzedDropDatabase, UnresolvedQuery
 
 
 <<concrete>>
 AnalyzedCreateTable
 - table: String
 - columns: List<ColumnMetadata>   // no ids yet; nullable defaults true
+
+
+<<concrete>>
+AnalyzedCreateDatabase
+- database: String
+
+
+<<concrete>>
+AnalyzedDropDatabase
+- database: String
 
 
 <<concrete>>
@@ -73,12 +83,12 @@ AnalysisException
 
 <<enumeration>>
 QueryType
-CREATE_TABLE, UNRESOLVED
+CREATE_TABLE, CREATE_DATABASE, DROP_DATABASE, UNRESOLVED
 
 
 <<interface>>
 ExecutionPlan
-<<sealed>> permits CreateTablePlan, UnresolvedPlan
+<<sealed>> permits CreateTablePlan, CreateDatabasePlan, DropDatabasePlan, UnresolvedPlan
 + queryType(): QueryType
 
 
@@ -86,6 +96,16 @@ ExecutionPlan
 CreateTablePlan
 - table: String
 - columns: List<ColumnMetadata>   // no ids yet; catalog assigns on execute
+
+
+<<concrete>>
+CreateDatabasePlan
+- database: String
+
+
+<<concrete>>
+DropDatabasePlan
+- database: String
 
 
 <<concrete>>
@@ -101,7 +121,7 @@ QueryPlanner
 <<concrete>>
 DefaultQueryPlanner
 + plan(analyzed: AnalyzedQuery): ExecutionPlan
-    // CREATE TABLE only; no CatalogManager / PhysicalStorage
+    // no CatalogManager / PhysicalStorage
 
 
 <<concrete>>
@@ -125,7 +145,7 @@ QueryExecutor
 CommandExecutor
 - catalogManager: CatalogManager
 + execute(plan: ExecutionPlan): QueryResult
-    // CREATE_TABLE only; writes catalog; not Volcano
+    // CREATE_TABLE / CREATE_DATABASE / DROP_DATABASE; writes catalog; not Volcano
 
 
 <<concrete>>
@@ -155,8 +175,8 @@ LockManager, TransactionManager, WALManager, BufferPool
 
 <<interface>>
 CatalogManager
-owns table/schema metadata (single database)
-owns CatalogStore (JSON persistence); callers never see catalog.json
+owns table/schema metadata and database folder names
+owns CatalogStore (JSON + directories); callers never see catalog.json
 + getTable(name: String): Optional<TableMetadata>
 + tableExists(name: String): boolean
 + createTable(table: TableMetadata): TableMetadata
@@ -164,31 +184,42 @@ owns CatalogStore (JSON persistence); callers never see catalog.json
     // persists via owned CatalogStore when constructed with PhysicalStorage
     // throws CatalogException: duplicate table, duplicate column, empty columns
 + allTables(): List<TableMetadata>
++ databaseExists(name: String): boolean
++ allDatabases(): List<String>
++ createDatabase(name: String)
++ dropDatabase(name: String)
+    // empty directory only
 + load()
-    // start-up: store → memory; keeps stored ids; nextTableId = max+1
+    // start-up: tables from catalog.json; database names from subdirectories
 
 
 <<concrete>>
 DefaultCatalogManager
 - tablesByName: Map<String, TableMetadata>
+- databaseNames: Set<String>
 - catalogStore: CatalogStore   // null in memory-only tests; JsonCatalogStore when given PhysicalStorage
 - nextTableId: int
-+ getTable / tableExists / createTable / allTables / load
++ getTable / tableExists / createTable / allTables
++ databaseExists / allDatabases / createDatabase / dropDatabase / load
 
 
 <<interface>>
 CatalogStore
-catalog persistence (JSON); PhysicalStorage sees bytes only
+catalog persistence (JSON + database directories); PhysicalStorage sees bytes/paths only
 + load(): List<TableMetadata>          // empty if catalog.json missing
 + saveAll(tables: List<TableMetadata>) // rewrite whole file
 + saveTable(table: TableMetadata)      // upsert by name, then rewrite
++ loadDatabases(): List<String>
++ createDatabase(name: String)
++ dropDatabase(name: String)
 
 
 <<concrete>>
 JsonCatalogStore
 - physicalStorage: PhysicalStorage
 catalog file: catalog.json at DataDirectory root
-+ load / saveAll / saveTable
+database dirs: <name>/ under store root
++ load / saveAll / saveTable / loadDatabases / createDatabase / dropDatabase
 
 
 <<concrete>>
@@ -217,6 +248,7 @@ INT, VARCHAR, BOOLEAN
 <<concrete>>
 CatalogException extends RuntimeException
 duplicate table / duplicate column / empty column list
+duplicate database / missing database / directory not empty
 
 
 <<interface>>
@@ -262,6 +294,9 @@ no catalog / JSON / SQL / WAL semantics
 + read(file: String, offset: long, length: int): byte[]
 + write(file: String, offset: long, bytes: byte[])
 + flush(file: String)
++ createDirectory(path: String)
++ deleteDirectory(path: String)        // empty only
++ listDirectories(path: String): List<String>  // "" = store root
     // file is a path relative to DataDirectory.root()
     // whole-file read/write require the file to exist (create first)
     // throws PhysicalStorageException: not found, already exists, invalid offset, I/O failure
@@ -273,11 +308,12 @@ DefaultPhysicalStorage
 - pageSize: int                 // default 16 KiB; unused by catalog I/O
 + pageSize(): int
 + create / delete / exists / read / write / flush
++ createDirectory / deleteDirectory / listDirectories
 
 
 <<concrete>>
 PhysicalStorageException extends RuntimeException
-file not found / already exists / invalid offset / failed to read|write|delete|flush|create
+file not found / already exists / invalid offset / directory not empty / failed to read|write|delete|flush|create
 
 
 <<concrete>>
@@ -514,9 +550,9 @@ DatabaseServer
       │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
       │                        ├── owns ▶ QueryParser (DefaultQueryParser)
       │                        ├── per query ▶ QueryAnalyser (DefaultQueryAnalyser + CatalogManager)
-      │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → CreateTablePlan)
+      │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → CreateTablePlan / CreateDatabasePlan / DropDatabasePlan)
       │                        ├── ExecutorService → ExecutorRegistry
-      │                        │         └── CREATE_TABLE → CommandExecutor → CatalogManager (write)
+      │                        │         └── CREATE_TABLE / CREATE_DATABASE / DROP_DATABASE → CommandExecutor → CatalogManager (write)
       │                        │              ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
       │                        │              └── AstNode (Query / Expression)
       │                        └── uses ▶ StorageEngine (shared)
@@ -529,7 +565,7 @@ Design note:
 DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProcessor (no lifecycle).
 NetworkModule owns RequestHandler.
 DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryPlanner; builds DefaultQueryAnalyser and ExecutorService on first catalog use from StorageEngine.catalogManager() (requires start()). Uses StorageEngine (does not own its lifecycle).
-execute() lexes, parses, analyses, plans, then runs CREATE TABLE through ExecutorService. Unresolved plans still echo OK <query>.
+execute() lexes, parses, analyses, plans, then runs CREATE TABLE / CREATE DATABASE / DROP DATABASE through ExecutorService. Unresolved plans still echo OK <query>.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.processor.lexer (unchanged names).
 Parser types live under com.example.database.processor.parser.
@@ -543,7 +579,9 @@ CatalogManager is a StorageEngine submodule and owns CatalogStore.
 DefaultStorageEngine constructs PhysicalStorage and DefaultCatalogManager(physicalStorage).
 start() calls catalogManager.load() — the engine does not touch catalog.json.
 createTable assigns ids and rewrites catalog.json. Restart: new engine, start, getTable("users").
-CatalogStore owns JSON; PhysicalStorage owns bytes.
+CREATE DATABASE creates data/<name>/; DROP DATABASE removes an empty directory. load() also lists those directories.
+CREATE TABLE via SQL (Phase 1.8): processor.execute then a new StorageEngine on the same dir; getTable is the same; a second CREATE is an error.
+CatalogStore owns JSON and database directory names; PhysicalStorage owns bytes.
 
 PhysicalStorage (Phase 1.2):
 PhysicalStorage is a StorageEngine submodule. DefaultPhysicalStorage is filesystem bytes under DataDirectory.

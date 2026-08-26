@@ -135,6 +135,37 @@ class DefaultCatalogManagerTest {
         assertEquals(5, orders.tableId().orElseThrow());
     }
 
+    @Test
+    void createDatabaseIsLookupableAndRejectsDuplicates() {
+        CatalogManager catalog = new DefaultCatalogManager();
+        catalog.createDatabase("shop");
+
+        assertTrue(catalog.databaseExists("shop"));
+        assertEquals(List.of("shop"), catalog.allDatabases());
+
+        CatalogException ex = assertThrows(
+                CatalogException.class,
+                () -> catalog.createDatabase("shop")
+        );
+        assertEquals("database already exists: shop", ex.getMessage());
+    }
+
+    @Test
+    void dropDatabaseRemovesNameAndRejectsMissing() {
+        CatalogManager catalog = new DefaultCatalogManager();
+        catalog.createDatabase("shop");
+        catalog.dropDatabase("shop");
+
+        assertFalse(catalog.databaseExists("shop"));
+        assertTrue(catalog.allDatabases().isEmpty());
+
+        CatalogException ex = assertThrows(
+                CatalogException.class,
+                () -> catalog.dropDatabase("shop")
+        );
+        assertEquals("database does not exist: shop", ex.getMessage());
+    }
+
     private static TableMetadata usersDefinition() {
         return TableMetadata.define(
                 "users",

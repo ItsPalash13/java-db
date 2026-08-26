@@ -1,6 +1,8 @@
 package com.example.database.processor.planner;
 
+import com.example.database.processor.analyser.AnalyzedCreateDatabase;
 import com.example.database.processor.analyser.AnalyzedCreateTable;
+import com.example.database.processor.analyser.AnalyzedDropDatabase;
 import com.example.database.processor.analyser.UnresolvedQuery;
 import com.example.database.processor.parser.ast.query.SelectQuery;
 import com.example.database.storage.catalog.ColumnMetadata;
@@ -31,6 +33,23 @@ class DefaultQueryPlannerTest {
         assertEquals("users", plan.table());
         assertEquals(columns, plan.columns());
         assertEquals(new CreateTablePlan("users", columns), plan);
+    }
+
+    @Test
+    void plansCreateAndDropDatabase() {
+        CreateDatabasePlan create = assertInstanceOf(
+                CreateDatabasePlan.class,
+                planner.plan(new AnalyzedCreateDatabase("shop"))
+        );
+        assertEquals(QueryType.CREATE_DATABASE, create.queryType());
+        assertEquals("shop", create.database());
+
+        DropDatabasePlan drop = assertInstanceOf(
+                DropDatabasePlan.class,
+                planner.plan(new AnalyzedDropDatabase("shop"))
+        );
+        assertEquals(QueryType.DROP_DATABASE, drop.queryType());
+        assertEquals("shop", drop.database());
     }
 
     @Test

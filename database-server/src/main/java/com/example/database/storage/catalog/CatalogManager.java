@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Owns table and schema metadata for the single Phase 1 database.
+ * Owns table and schema metadata, plus database names (folders under the store root).
  * Does not own row data or index structures — those are {@code TableStore} and {@code IndexStore}.
  * Owns {@code CatalogStore} for persistence; callers never talk to the store or catalog.json.
  */
@@ -25,8 +25,24 @@ public interface CatalogManager {
     /** Insertion-order snapshot of in-memory tables. */
     List<TableMetadata> allTables();
 
+    boolean databaseExists(String name);
+
+    /** Insertion-order snapshot of database names. */
+    List<String> allDatabases();
+
     /**
-     * Loads tables from the catalog store into memory, keeping stored ids.
+     * @throws CatalogException if the name already exists
+     */
+    void createDatabase(String name);
+
+    /**
+     * @throws CatalogException if the name is missing or the directory is not empty
+     */
+    void dropDatabase(String name);
+
+    /**
+     * Loads tables from the catalog store into memory, keeping stored ids,
+     * and restores database names from directories.
      * Called from {@code StorageEngine.start()}, not from SQL.
      */
     void load();

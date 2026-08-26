@@ -8,7 +8,8 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * JSON catalog file at the store root. {@link PhysicalStorage} only receives bytes.
+ * JSON catalog file at the store root; database names are directories.
+ * {@link PhysicalStorage} only receives relative paths and bytes.
  */
 public final class JsonCatalogStore implements CatalogStore {
 
@@ -61,6 +62,35 @@ public final class JsonCatalogStore implements CatalogStore {
             tables.add(table);
         }
         saveAll(tables);
+    }
+
+    @Override
+    public List<String> loadDatabases() {
+        try {
+            return physicalStorage.listDirectories("");
+        } catch (PhysicalStorageException e) {
+            throw new CatalogException("failed to load databases", e);
+        }
+    }
+
+    @Override
+    public void createDatabase(String name) {
+        Objects.requireNonNull(name, "name");
+        try {
+            physicalStorage.createDirectory(name);
+        } catch (PhysicalStorageException e) {
+            throw new CatalogException("failed to create database: " + name, e);
+        }
+    }
+
+    @Override
+    public void dropDatabase(String name) {
+        Objects.requireNonNull(name, "name");
+        try {
+            physicalStorage.deleteDirectory(name);
+        } catch (PhysicalStorageException e) {
+            throw new CatalogException("failed to drop database: " + name, e);
+        }
     }
 
     private void writeCatalog(byte[] bytes) {

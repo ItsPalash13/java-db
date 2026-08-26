@@ -71,4 +71,15 @@ class JsonCatalogStoreTest {
 
         assertEquals(List.of(updated), store.load());
     }
+
+    @Test
+    void createDatabaseRoundTripsDirectoryNames() {
+        store.createDatabase("shop");
+        store.createDatabase("app");
+
+        assertEquals(List.of("app", "shop"), store.loadDatabases());
+
+        store.dropDatabase("shop");
+        assertEquals(List.of("app"), store.loadDatabases());
+    }
 }

@@ -3,7 +3,9 @@ package com.example.database.processor.analyser;
 import com.example.database.processor.parser.ast.AstNode;
 import com.example.database.processor.parser.ast.ColumnDefinition;
 import com.example.database.processor.parser.ast.ColumnSqlType;
+import com.example.database.processor.parser.ast.query.CreateDatabaseQuery;
 import com.example.database.processor.parser.ast.query.CreateTableQuery;
+import com.example.database.processor.parser.ast.query.DropDatabaseQuery;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.ColumnType;
@@ -15,7 +17,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Phase 1.5: semantic checks for CREATE TABLE only. Reads {@link CatalogManager}; never mutates it.
+ * Semantic checks for CREATE TABLE / CREATE DATABASE / DROP DATABASE. Reads catalog; never mutates it.
  */
 public final class DefaultQueryAnalyser implements QueryAnalyser {
 
@@ -30,6 +32,12 @@ public final class DefaultQueryAnalyser implements QueryAnalyser {
         Objects.requireNonNull(ast, "ast");
         if (ast instanceof CreateTableQuery createTable) {
             return analyseCreateTable(createTable);
+        }
+        if (ast instanceof CreateDatabaseQuery createDatabase) {
+            return analyseCreateDatabase(createDatabase);
+        }
+        if (ast instanceof DropDatabaseQuery dropDatabase) {
+            return analyseDropDatabase(dropDatabase);
         }
         return new UnresolvedQuery(ast);
     }
@@ -52,6 +60,22 @@ public final class DefaultQueryAnalyser implements QueryAnalyser {
             columns.add(ColumnMetadata.define(column.name(), toColumnType(column.type())));
         }
         return new AnalyzedCreateTable(table, columns);
+    }
+
+    private AnalyzedCreateDatabase analyseCreateDatabase(CreateDatabaseQuery query) {
+        String database = query.name();
+        if (catalogManager.databaseExists(database)) {
+            throw new AnalysisException("database already exists: " + database);
+        }
+        return new AnalyzedCreateDatabase(database);
+    }
+
+    private AnalyzedDropDatabase analyseDropDatabase(DropDatabaseQuery query) {
+        String database = query.name();
+        if (!catalogManager.databaseExists(database)) {
+            throw new AnalysisException("database does not exist: " + database);
+        }
+        return new AnalyzedDropDatabase(database);
     }
 
     private static ColumnType toColumnType(ColumnSqlType sqlType) {

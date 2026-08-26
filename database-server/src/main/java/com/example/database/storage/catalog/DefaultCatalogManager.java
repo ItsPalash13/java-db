@@ -5,6 +5,7 @@ import com.example.database.storage.physical.PhysicalStorage;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -13,11 +14,13 @@ import java.util.Set;
 
 /**
  * In-memory catalog. Owns {@link CatalogStore} when constructed with {@link PhysicalStorage}.
- * {@link #createTable} then rewrites the catalog file; {@link #load} fills memory on storage start.
+ * {@link #createTable} rewrites catalog.json; {@link #createDatabase} creates a folder.
+ * {@link #load} fills memory on storage start.
  */
 public final class DefaultCatalogManager implements CatalogManager {
 
     private final Map<String, TableMetadata> tablesByName = new LinkedHashMap<>();
+    private final Set<String> databaseNames = new LinkedHashSet<>();
     private final CatalogStore catalogStore;
     // Plain int on purpose. AtomicInteger would only make the counter race-free;
     // createTable also mutates the map and rewrites catalog.json. Concurrent DDL
@@ -86,11 +89,54 @@ public final class DefaultCatalogManager implements CatalogManager {
     }
 
     @Override
+    public boolean databaseExists(String name) {
+        Objects.requireNonNull(name, "name");
+        return databaseNames.contains(name);
+    }
+
+    @Override
+    public List<String> allDatabases() {
+        return List.copyOf(databaseNames);
+    }
+
+    @Override
+    public void createDatabase(String name) {
+        requireDatabaseName(name);
+        if (databaseNames.contains(name)) {
+            throw new CatalogException("database already exists: " + name);
+        }
+        databaseNames.add(name);
+        try {
+            persistCreateDatabase(name);
+        } catch (RuntimeException e) {
+            databaseNames.remove(name);
+            throw e;
+        }
+    }
+
+    @Override
+    public void dropDatabase(String name) {
+        requireDatabaseName(name);
+        if (!databaseNames.contains(name)) {
+            throw new CatalogException("database does not exist: " + name);
+        }
+        databaseNames.remove(name);
+        try {
+            persistDropDatabase(name);
+        } catch (RuntimeException e) {
+            databaseNames.add(name);
+            throw e;
+        }
+    }
+
+    @Override
     public void load() {
         if (catalogStore == null) {
             return;
         }
         replaceAll(catalogStore.load());
+        databaseNames.clear();
+        databaseNames.addAll(catalogStore.loadDatabases());
     }
 
     void replaceAll(List<TableMetadata> tables) {
@@ -116,5 +162,31 @@ public final class DefaultCatalogManager implements CatalogManager {
             return;
         }
         catalogStore.saveAll(allTables());
+    }
+
+    private void persistCreateDatabase(String name) {
+        if (catalogStore == null) {
+            return;
+        }
+        catalogStore.createDatabase(name);
+    }
+
+    private void persistDropDatabase(String name) {
+        if (catalogStore == null) {
+            return;
+        }
+        catalogStore.dropDatabase(name);
+    }
+
+    private static void requireDatabaseName(String name) {
+        Objects.requireNonNull(name, "name");
+        if (name.isBlank()) {
+            throw new CatalogException("database name must not be blank");
+        }
+        // CatalogStore uses the name as a relative path; reject separators so CREATE
+        // cannot write outside a single folder under the store root.
+        if (name.contains("/") || name.contains("\\") || name.contains("..")) {
+            throw new CatalogException("invalid database name: " + name);
+        }
     }
 }

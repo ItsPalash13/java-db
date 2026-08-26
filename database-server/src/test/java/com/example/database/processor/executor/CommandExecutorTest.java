@@ -1,6 +1,8 @@
 package com.example.database.processor.executor;
 
+import com.example.database.processor.planner.CreateDatabasePlan;
 import com.example.database.processor.planner.CreateTablePlan;
+import com.example.database.processor.planner.DropDatabasePlan;
 import com.example.database.processor.planner.UnresolvedPlan;
 import com.example.database.processor.analyser.UnresolvedQuery;
 import com.example.database.processor.parser.ast.query.SelectQuery;
@@ -75,5 +77,17 @@ class CommandExecutorTest {
         );
         assertTrue(ex.getMessage().contains("UNRESOLVED"));
         assertTrue(catalog.allTables().isEmpty());
+    }
+
+    @Test
+    void createAndDropDatabaseUpdateCatalog() {
+        CatalogManager catalog = new DefaultCatalogManager();
+        CommandExecutor executor = new CommandExecutor(catalog);
+
+        assertEquals("OK", executor.execute(new CreateDatabasePlan("shop")).toResponse());
+        assertTrue(catalog.databaseExists("shop"));
+
+        assertEquals("OK", executor.execute(new DropDatabasePlan("shop")).toResponse());
+        assertTrue(catalog.allDatabases().isEmpty());
     }
 }

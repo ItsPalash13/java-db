@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -74,6 +75,39 @@ class DefaultStorageEngineTest {
             assertEquals(ColumnType.VARCHAR, loaded.columns().get(1).type());
         } finally {
             second.stop();
+        }
+    }
+
+    @Test
+    void createDatabaseSurvivesRestart() {
+        Path root = tempDir.resolve("store");
+
+        DefaultStorageEngine first = new DefaultStorageEngine(new DataDirectory(root));
+        first.start();
+        try {
+            first.catalogManager().createDatabase("shop");
+            assertTrue(first.catalogManager().databaseExists("shop"));
+            assertTrue(Files.isDirectory(root.resolve("shop")));
+        } finally {
+            first.stop();
+        }
+
+        DefaultStorageEngine second = new DefaultStorageEngine(new DataDirectory(root));
+        second.start();
+        try {
+            assertTrue(second.catalogManager().databaseExists("shop"));
+            second.catalogManager().dropDatabase("shop");
+            assertFalse(Files.isDirectory(root.resolve("shop")));
+        } finally {
+            second.stop();
+        }
+
+        DefaultStorageEngine third = new DefaultStorageEngine(new DataDirectory(root));
+        third.start();
+        try {
+            assertFalse(third.catalogManager().databaseExists("shop"));
+        } finally {
+            third.stop();
         }
     }
 }

@@ -6,5 +6,7 @@ package com.example.database.processor.planner;
  */
 public enum QueryType {
     CREATE_TABLE,
+    CREATE_DATABASE,
+    DROP_DATABASE,
     UNRESOLVED
 }

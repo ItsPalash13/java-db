@@ -1,6 +1,8 @@
 package com.example.database.processor.executor;
 
+import com.example.database.processor.planner.CreateDatabasePlan;
 import com.example.database.processor.planner.CreateTablePlan;
+import com.example.database.processor.planner.DropDatabasePlan;
 import com.example.database.processor.planner.ExecutionPlan;
 import com.example.database.storage.catalog.CatalogException;
 import com.example.database.storage.catalog.CatalogManager;
@@ -23,19 +25,25 @@ public final class CommandExecutor implements QueryExecutor {
     @Override
     public QueryResult execute(ExecutionPlan plan) {
         Objects.requireNonNull(plan, "plan");
-        if (!(plan instanceof CreateTablePlan createTable)) {
-            throw new ExecutionException(
-                    "CommandExecutor cannot execute " + plan.queryType()
-            );
-        }
         try {
-            // Ids are assigned here, not in the planner. Persist is inside createTable.
-            catalogManager.createTable(
-                    TableMetadata.define(createTable.table(), createTable.columns())
-            );
+            if (plan instanceof CreateTablePlan createTable) {
+                // Ids are assigned here, not in the planner. Persist is inside createTable.
+                catalogManager.createTable(
+                        TableMetadata.define(createTable.table(), createTable.columns())
+                );
+                return QueryResult.ok();
+            }
+            if (plan instanceof CreateDatabasePlan createDatabase) {
+                catalogManager.createDatabase(createDatabase.database());
+                return QueryResult.ok();
+            }
+            if (plan instanceof DropDatabasePlan dropDatabase) {
+                catalogManager.dropDatabase(dropDatabase.database());
+                return QueryResult.ok();
+            }
         } catch (CatalogException e) {
             throw new ExecutionException(e.getMessage(), e);
         }
-        return QueryResult.ok();
+        throw new ExecutionException("CommandExecutor cannot execute " + plan.queryType());
     }
 }

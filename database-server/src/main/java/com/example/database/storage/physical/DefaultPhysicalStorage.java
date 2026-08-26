@@ -5,11 +5,15 @@ import com.example.database.storage.DataDirectory;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.channels.FileChannel;
+import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -170,6 +174,68 @@ public final class DefaultPhysicalStorage implements PhysicalStorage {
         } catch (IOException e) {
             throw new PhysicalStorageException("failed to flush " + file, e);
         }
+    }
+
+    @Override
+    public void createDirectory(String path) {
+        Path dir = resolve(path);
+        try {
+            // createDirectories is idempotent if shop/ already exists; CatalogManager
+            // rejects duplicate CREATE DATABASE before this is called.
+            Files.createDirectories(dir);
+        } catch (IOException e) {
+            throw new PhysicalStorageException("failed to create directory " + path, e);
+        }
+    }
+
+    @Override
+    public void deleteDirectory(String path) {
+        Path dir = resolve(path);
+        if (!Files.isDirectory(dir)) {
+            throw new PhysicalStorageException("directory not found: " + path);
+        }
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+            // DROP DATABASE must not wipe table folders; only an empty database dir.
+            if (stream.iterator().hasNext()) {
+                throw new PhysicalStorageException("directory is not empty: " + path);
+            }
+        } catch (PhysicalStorageException e) {
+            throw e;
+        } catch (IOException e) {
+            throw new PhysicalStorageException("failed to delete directory " + path, e);
+        }
+        try {
+            Files.delete(dir);
+        } catch (IOException e) {
+            throw new PhysicalStorageException("failed to delete directory " + path, e);
+        }
+    }
+
+    @Override
+    public List<String> listDirectories(String path) {
+        Path dir = resolveListRoot(path);
+        if (!Files.isDirectory(dir)) {
+            throw new PhysicalStorageException("directory not found: " + path);
+        }
+        List<String> names = new ArrayList<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir, Files::isDirectory)) {
+            for (Path child : stream) {
+                names.add(child.getFileName().toString());
+            }
+        } catch (IOException e) {
+            throw new PhysicalStorageException("failed to list directories " + path, e);
+        }
+        Collections.sort(names);
+        return List.copyOf(names);
+    }
+
+    private Path resolveListRoot(String path) {
+        Objects.requireNonNull(path, "path");
+        // Empty path means the store root so CatalogStore can discover database folders.
+        if (path.isEmpty()) {
+            return root;
+        }
+        return resolve(path);
     }
 
     private Path resolve(String file) {

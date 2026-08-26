@@ -31,8 +31,8 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Lex → parse → analyse → plan → execute. CREATE TABLE writes the catalog;
- * other statements still echo {@code OK <query>} until their own executor branches.
+ * Lex → parse → analyse → plan → execute. CREATE TABLE, CREATE DATABASE, and DROP DATABASE
+ * write the catalog; other statements still echo {@code OK <query>} until their own executor branches.
  */
 public final class DefaultQueryProcessor implements QueryProcessor {
 
@@ -121,10 +121,10 @@ public final class DefaultQueryProcessor implements QueryProcessor {
         // and Main constructs this processor before DatabaseServer.start().
         if (executorService == null) {
             ExecutorRegistry registry = new ExecutorRegistry();
-            registry.register(
-                    QueryType.CREATE_TABLE,
-                    new CommandExecutor(storageEngine.catalogManager())
-            );
+            CommandExecutor commands = new CommandExecutor(storageEngine.catalogManager());
+            registry.register(QueryType.CREATE_TABLE, commands);
+            registry.register(QueryType.CREATE_DATABASE, commands);
+            registry.register(QueryType.DROP_DATABASE, commands);
             executorService = new ExecutorService(registry);
         }
         return executorService;
