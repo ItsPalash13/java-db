@@ -1,27 +1,28 @@
 package com.example.database.processor.parser.ast.query;
 
 import com.example.database.processor.parser.ast.Expression;
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.Query;
 
 import java.util.List;
 import java.util.Objects;
 
 /**
- * INSERT INTO table [(columns)] VALUES (values).
+ * INSERT INTO database.table [(columns)] VALUES (values).
  */
 public final class InsertQuery implements Query {
 
-    private final String table;
+    private final QualifiedTable table;
     private final List<String> columns;
     private final List<Expression> values;
 
-    public InsertQuery(String table, List<String> columns, List<Expression> values) {
+    public InsertQuery(QualifiedTable table, List<String> columns, List<Expression> values) {
         this.table = Objects.requireNonNull(table, "table");
         this.columns = List.copyOf(Objects.requireNonNull(columns, "columns"));
         this.values = List.copyOf(Objects.requireNonNull(values, "values"));
     }
 
-    public String table() {
+    public QualifiedTable table() {
         return table;
     }
 

@@ -10,19 +10,24 @@ import java.util.Optional;
  */
 public interface CatalogManager {
 
-    Optional<TableMetadata> getTable(String name);
+    Optional<TableMetadata> getTable(String database, String table);
 
-    boolean tableExists(String name);
+    boolean tableExists(String database, String table);
 
     /**
      * Registers a table and assigns table/column ids. Incoming ids on {@code table} are ignored.
      *
-     * @throws CatalogException if the table name already exists, a column name is duplicated,
-     *                          or the column list is empty
+     * @throws CatalogException if the database is missing, the table name already exists in that
+     *                          database, a column name is duplicated, or the column list is empty
      */
     TableMetadata createTable(TableMetadata table);
 
-    /** Insertion-order snapshot of in-memory tables. */
+    /**
+     * @throws CatalogException if the database or table is missing
+     */
+    void dropTable(String database, String table);
+
+    /** Insertion-order snapshot of in-memory tables across all databases. */
     List<TableMetadata> allTables();
 
     boolean databaseExists(String name);
@@ -36,12 +41,13 @@ public interface CatalogManager {
     void createDatabase(String name);
 
     /**
-     * @throws CatalogException if the name is missing or the directory is not empty
+     * @throws CatalogException if the name is missing, the database still has tables,
+     *                          or the directory is not empty
      */
     void dropDatabase(String name);
 
     /**
-     * Loads tables from the catalog store into memory, keeping stored ids,
+     * Loads tables from per-table catalog files into memory, keeping stored ids,
      * and restores database names from directories.
      * Called from {@code StorageEngine.start()}, not from SQL.
      */

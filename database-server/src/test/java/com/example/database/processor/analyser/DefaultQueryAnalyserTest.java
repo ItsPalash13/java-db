@@ -2,9 +2,11 @@ package com.example.database.processor.analyser;
 
 import com.example.database.processor.parser.ast.ColumnDefinition;
 import com.example.database.processor.parser.ast.ColumnSqlType;
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.query.CreateDatabaseQuery;
 import com.example.database.processor.parser.ast.query.CreateTableQuery;
 import com.example.database.processor.parser.ast.query.DropDatabaseQuery;
+import com.example.database.processor.parser.ast.query.DropTableQuery;
 import com.example.database.processor.parser.ast.query.SelectQuery;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.ColumnMetadata;
@@ -24,12 +26,13 @@ class DefaultQueryAnalyserTest {
 
     @Test
     void acceptsNewCreateTableWithoutMutatingCatalog() {
-        CatalogManager catalog = new DefaultCatalogManager();
+        CatalogManager catalog = catalogWithShop();
         DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
 
         AnalyzedQuery analyzed = analyser.analyse(usersCreateTableQuery());
 
         AnalyzedCreateTable createTable = assertInstanceOf(AnalyzedCreateTable.class, analyzed);
+        assertEquals("shop", createTable.database());
         assertEquals("users", createTable.table());
         assertEquals(
                 List.of(
@@ -42,9 +45,22 @@ class DefaultQueryAnalyserTest {
     }
 
     @Test
-    void rejectsCreateTableWhenTableAlreadyExists() {
+    void rejectsCreateTableWhenDatabaseMissing() {
         CatalogManager catalog = new DefaultCatalogManager();
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(usersCreateTableQuery())
+        );
+        assertEquals("database does not exist: shop", ex.getMessage());
+    }
+
+    @Test
+    void rejectsCreateTableWhenTableAlreadyExists() {
+        CatalogManager catalog = catalogWithShop();
         catalog.createTable(TableMetadata.define(
+                "shop",
                 "users",
                 List.of(ColumnMetadata.define("id", ColumnType.INT))
         ));
@@ -54,20 +70,20 @@ class DefaultQueryAnalyserTest {
                 AnalysisException.class,
                 () -> analyser.analyse(usersCreateTableQuery())
         );
-        assertEquals("table already exists: users", ex.getMessage());
-        assertEquals("ERROR: table already exists: users", ex.toResponse());
+        assertEquals("table already exists: shop.users", ex.getMessage());
+        assertEquals("ERROR: table already exists: shop.users", ex.toResponse());
         assertEquals(1, catalog.allTables().size());
     }
 
     @Test
     void rejectsDuplicateColumnNames() {
-        CatalogManager catalog = new DefaultCatalogManager();
+        CatalogManager catalog = catalogWithShop();
         DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
         List<ColumnDefinition> columns = List.of(
                 new ColumnDefinition("id", ColumnSqlType.INT),
                 new ColumnDefinition("id", ColumnSqlType.VARCHAR)
         );
-        CreateTableQuery query = new CreateTableQuery("users", columns);
+        CreateTableQuery query = new CreateTableQuery(shopUsers(), columns);
 
         AnalysisException ex = assertThrows(
                 AnalysisException.class,
@@ -79,21 +95,52 @@ class DefaultQueryAnalyserTest {
 
     @Test
     void rejectsEmptyColumnList() {
-        CatalogManager catalog = new DefaultCatalogManager();
+        CatalogManager catalog = catalogWithShop();
         DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
 
         AnalysisException ex = assertThrows(
                 AnalysisException.class,
-                () -> analyser.analyse(new CreateTableQuery("users", List.of()))
+                () -> analyser.analyse(new CreateTableQuery(shopUsers(), List.of()))
         );
-        assertEquals("table must have at least one column: users", ex.getMessage());
+        assertEquals("table must have at least one column: shop.users", ex.getMessage());
+    }
+
+    @Test
+    void acceptsDropTableWhenTableExistsWithoutMutatingCatalog() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(ColumnMetadata.define("id", ColumnType.INT))
+        ));
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalyzedDropTable analyzed = assertInstanceOf(
+                AnalyzedDropTable.class,
+                analyser.analyse(dropUsersTableQuery())
+        );
+        assertEquals("shop", analyzed.database());
+        assertEquals("users", analyzed.table());
+        assertEquals(1, catalog.allTables().size());
+    }
+
+    @Test
+    void rejectsDropTableWhenMissing() {
+        CatalogManager catalog = catalogWithShop();
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(dropUsersTableQuery())
+        );
+        assertEquals("table does not exist: shop.users", ex.getMessage());
     }
 
     @Test
     void passesThroughSelectAsUnresolved() {
         CatalogManager catalog = new DefaultCatalogManager();
         DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
-        SelectQuery select = new SelectQuery(true, List.of(), "users", null);
+        SelectQuery select = new SelectQuery(true, List.of(), shopUsers(), null);
 
         UnresolvedQuery unresolved = assertInstanceOf(
                 UnresolvedQuery.class,
@@ -155,11 +202,44 @@ class DefaultQueryAnalyserTest {
         assertEquals("database does not exist: shop", ex.getMessage());
     }
 
+    @Test
+    void rejectsDropDatabaseWhenTablesRemain() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(ColumnMetadata.define("id", ColumnType.INT))
+        ));
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new DropDatabaseQuery("shop"))
+        );
+        assertEquals("database is not empty: shop", ex.getMessage());
+        assertEquals(1, catalog.allTables().size());
+    }
+
+    private static CatalogManager catalogWithShop() {
+        CatalogManager catalog = new DefaultCatalogManager();
+        catalog.createDatabase("shop");
+        return catalog;
+    }
+
     private static CreateTableQuery usersCreateTableQuery() {
         List<ColumnDefinition> columns = List.of(
                 new ColumnDefinition("id", ColumnSqlType.INT),
                 new ColumnDefinition("name", ColumnSqlType.VARCHAR)
         );
-        return new CreateTableQuery("users", columns);
+        return new CreateTableQuery(shopUsers(), columns);
+    }
+
+    private static DropTableQuery dropUsersTableQuery() {
+        QualifiedTable table = shopUsers();
+        return new DropTableQuery(table);
+    }
+
+    private static QualifiedTable shopUsers() {
+        return new QualifiedTable("shop", "users");
     }
 }

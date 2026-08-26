@@ -6,6 +6,7 @@ import com.example.database.processor.lexer.Token;
 import com.example.database.processor.parser.ast.AstNode;
 import com.example.database.processor.parser.ast.ColumnDefinition;
 import com.example.database.processor.parser.ast.ColumnSqlType;
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.expr.BinaryExpression;
 import com.example.database.processor.parser.ast.expr.ColumnExpression;
 import com.example.database.processor.parser.ast.expr.LiteralExpression;
@@ -37,21 +38,21 @@ class DefaultQueryParserTest {
 
     @Test
     void parsesSelectStar() {
-        SelectQuery query = parseAs("SELECT * FROM users", SelectQuery.class);
+        SelectQuery query = parseAs("SELECT * FROM shop.users", SelectQuery.class);
         assertTrue(query.star());
         assertTrue(query.projections().isEmpty());
-        assertEquals("users", query.table());
+        assertEquals(new QualifiedTable("shop", "users"), query.table());
         assertTrue(query.where().isEmpty());
     }
 
     @Test
     void parsesSelectColumnsWithWhere() {
-        SelectQuery query = parseAs("SELECT id, name FROM users WHERE age >= 18", SelectQuery.class);
+        SelectQuery query = parseAs("SELECT id, name FROM shop.users WHERE age >= 18", SelectQuery.class);
         assertFalse(query.star());
         assertEquals(2, query.projections().size());
         assertInstanceOf(ColumnExpression.class, query.projections().get(0));
         assertEquals("id", ((ColumnExpression) query.projections().get(0)).name());
-        assertEquals("users", query.table());
+        assertEquals(new QualifiedTable("shop", "users"), query.table());
         BinaryExpression where = assertInstanceOf(BinaryExpression.class, query.where().orElseThrow());
         assertEquals(com.example.database.processor.lexer.TokenCatalog.GTE, where.operator());
     }
@@ -59,10 +60,10 @@ class DefaultQueryParserTest {
     @Test
     void parsesUpdate() {
         UpdateQuery query = parseAs(
-                "UPDATE users SET name = \"Bob\" WHERE id = 1",
+                "UPDATE shop.users SET name = \"Bob\" WHERE id = 1",
                 UpdateQuery.class
         );
-        assertEquals("users", query.table());
+        assertEquals(new QualifiedTable("shop", "users"), query.table());
         assertEquals(1, query.assignments().size());
         assertEquals("name", query.assignments().get(0).column());
         assertInstanceOf(LiteralExpression.class, query.assignments().get(0).value());
@@ -72,10 +73,10 @@ class DefaultQueryParserTest {
     @Test
     void parsesInsertWithColumns() {
         InsertQuery query = parseAs(
-                "INSERT INTO users (id, name) VALUES (1, 'Ada')",
+                "INSERT INTO shop.users (id, name) VALUES (1, 'Ada')",
                 InsertQuery.class
         );
-        assertEquals("users", query.table());
+        assertEquals(new QualifiedTable("shop", "users"), query.table());
         assertEquals(List.of("id", "name"), query.columns());
         assertEquals(2, query.values().size());
         assertEquals(1L, ((LiteralExpression) query.values().get(0)).value());
@@ -85,7 +86,7 @@ class DefaultQueryParserTest {
     @Test
     void parsesInsertWithoutColumns() {
         InsertQuery query = parseAs(
-                "INSERT INTO users VALUES (1, 'hi', FALSE)",
+                "INSERT INTO shop.users VALUES (1, 'hi', FALSE)",
                 InsertQuery.class
         );
         assertTrue(query.columns().isEmpty());
@@ -95,9 +96,9 @@ class DefaultQueryParserTest {
 
     @Test
     void parsesDelete() {
-        DeleteQuery query = parseAs("DELETE FROM users WHERE id <= 10", DeleteQuery.class);
+        DeleteQuery query = parseAs("DELETE FROM shop.users WHERE id <= 10", DeleteQuery.class);
         assertTrue(query.where().isPresent());
-        assertEquals("users", query.table());
+        assertEquals(new QualifiedTable("shop", "users"), query.table());
     }
 
     @Test
@@ -115,10 +116,10 @@ class DefaultQueryParserTest {
     @Test
     void parsesCreateTable() {
         CreateTableQuery query = parseAs(
-                "CREATE TABLE users (id INT, name VARCHAR)",
+                "CREATE TABLE shop.users (id INT, name VARCHAR)",
                 CreateTableQuery.class
         );
-        assertEquals("users", query.table());
+        assertEquals(new QualifiedTable("shop", "users"), query.table());
         assertEquals(
                 List.of(
                         new ColumnDefinition("id", ColumnSqlType.INT),
@@ -131,7 +132,7 @@ class DefaultQueryParserTest {
     @Test
     void parsesCreateTableWithIntegerAndBooleanTypes() {
         CreateTableQuery query = parseAs(
-                "CREATE TABLE flags (count INTEGER, active BOOLEAN)",
+                "CREATE TABLE shop.flags (count INTEGER, active BOOLEAN)",
                 CreateTableQuery.class
         );
         assertEquals(
@@ -145,38 +146,48 @@ class DefaultQueryParserTest {
 
     @Test
     void rejectsCreateTableWithoutColumnTypes() {
-        List<Token> tokens = lexer.tokenize("CREATE TABLE users (id, name)");
+        List<Token> tokens = lexer.tokenize("CREATE TABLE shop.users (id, name)");
         ParseException ex = assertThrows(ParseException.class, () -> parser.parse(tokens));
         assertTrue(ex.toResponse().contains("expected column type"));
     }
 
     @Test
+    void rejectsUnqualifiedTableName() {
+        List<Token> tokens = lexer.tokenize("SELECT * FROM users");
+        ParseException ex = assertThrows(ParseException.class, () -> parser.parse(tokens));
+        assertTrue(ex.toResponse().contains("expected DOT"));
+    }
+
+    @Test
     void parsesCreateIndex() {
         CreateIndexQuery query = parseAs(
-                "CREATE INDEX idx_users ON users (id, name)",
+                "CREATE INDEX idx_users ON shop.users (id, name)",
                 CreateIndexQuery.class
         );
         assertEquals("idx_users", query.index());
-        assertEquals("users", query.table());
+        assertEquals(new QualifiedTable("shop", "users"), query.table());
         assertEquals(List.of("id", "name"), query.columns());
     }
 
     @Test
     void parsesDropDatabaseTableIndex() {
         assertEquals("mydb", parseAs("DROP DATABASE mydb", DropDatabaseQuery.class).name());
-        assertEquals("users", parseAs("DROP TABLE users", DropTableQuery.class).table());
+        assertEquals(
+                new QualifiedTable("shop", "users"),
+                parseAs("DROP TABLE shop.users", DropTableQuery.class).table()
+        );
         assertEquals("idx_users", parseAs("DROP INDEX idx_users", DropIndexQuery.class).index());
     }
 
     @Test
     void parsesAlterTableAddAndDropColumn() {
-        AlterTableQuery add = parseAs("ALTER TABLE users ADD age", AlterTableQuery.class);
-        assertEquals("users", add.table());
+        AlterTableQuery add = parseAs("ALTER TABLE shop.users ADD age", AlterTableQuery.class);
+        assertEquals(new QualifiedTable("shop", "users"), add.table());
         assertEquals(AlterTableQuery.Action.ADD_COLUMN, add.action());
         assertEquals("age", add.column());
 
         AlterTableQuery drop = parseAs(
-                "ALTER TABLE users DROP COLUMN age",
+                "ALTER TABLE shop.users DROP COLUMN age",
                 AlterTableQuery.class
         );
         assertEquals(AlterTableQuery.Action.DROP_COLUMN, drop.action());
@@ -196,7 +207,7 @@ class DefaultQueryParserTest {
 
     @Test
     void rejectsCreateTableWithoutColumns() {
-        List<Token> tokens = lexer.tokenize("CREATE TABLE users");
+        List<Token> tokens = lexer.tokenize("CREATE TABLE shop.users");
         ParseException ex = assertThrows(ParseException.class, () -> parser.parse(tokens));
         assertTrue(ex.toResponse().contains("expected LPAREN"));
     }

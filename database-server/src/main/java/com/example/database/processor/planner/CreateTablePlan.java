@@ -11,10 +11,12 @@ import java.util.Objects;
  */
 public final class CreateTablePlan implements ExecutionPlan {
 
+    private final String database;
     private final String table;
     private final List<ColumnMetadata> columns;
 
-    public CreateTablePlan(String table, List<ColumnMetadata> columns) {
+    public CreateTablePlan(String database, String table, List<ColumnMetadata> columns) {
+        this.database = Objects.requireNonNull(database, "database");
         this.table = Objects.requireNonNull(table, "table");
         this.columns = List.copyOf(Objects.requireNonNull(columns, "columns"));
         if (columns.isEmpty()) {
@@ -25,6 +27,10 @@ public final class CreateTablePlan implements ExecutionPlan {
     @Override
     public QueryType queryType() {
         return QueryType.CREATE_TABLE;
+    }
+
+    public String database() {
+        return database;
     }
 
     public String table() {
@@ -43,16 +49,18 @@ public final class CreateTablePlan implements ExecutionPlan {
         if (!(other instanceof CreateTablePlan that)) {
             return false;
         }
-        return table.equals(that.table) && columns.equals(that.columns);
+        return database.equals(that.database)
+                && table.equals(that.table)
+                && columns.equals(that.columns);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(table, columns);
+        return Objects.hash(database, table, columns);
     }
 
     @Override
     public String toString() {
-        return "CreateTablePlan{table=" + table + ", columns=" + columns + "}";
+        return "CreateTablePlan{database=" + database + ", table=" + table + ", columns=" + columns + "}";
     }
 }

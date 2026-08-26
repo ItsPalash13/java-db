@@ -6,6 +6,7 @@ package com.example.database.processor.planner;
 public sealed interface ExecutionPlan permits
         CreateTablePlan,
         CreateDatabasePlan,
+        DropTablePlan,
         DropDatabasePlan,
         UnresolvedPlan {
 

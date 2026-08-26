@@ -4,15 +4,17 @@ import com.example.database.processor.lexer.Token;
 import com.example.database.processor.lexer.TokenCatalog;
 import com.example.database.processor.parser.ParseException;
 import com.example.database.processor.parser.Parser;
+import com.example.database.processor.parser.QualifiedNames;
 import com.example.database.processor.parser.TokenStream;
 import com.example.database.processor.parser.ast.AstNode;
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.query.DropDatabaseQuery;
 import com.example.database.processor.parser.ast.query.DropIndexQuery;
 import com.example.database.processor.parser.ast.query.DropTableQuery;
 
 /**
  * DROP DATABASE ident
- * DROP TABLE ident
+ * DROP TABLE ident DOT ident
  * DROP INDEX ident
  */
 public final class DropParser implements Parser {
@@ -27,7 +29,7 @@ public final class DropParser implements Parser {
         }
 
         if (stream.match(TokenCatalog.TABLE)) {
-            String table = stream.expect(TokenCatalog.IDENTIFIER).lexeme();
+            QualifiedTable table = QualifiedNames.parseTable(stream);
             return new DropTableQuery(table);
         }
 

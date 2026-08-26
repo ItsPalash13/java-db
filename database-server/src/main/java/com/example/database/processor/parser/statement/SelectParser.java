@@ -2,9 +2,11 @@ package com.example.database.processor.parser.statement;
 
 import com.example.database.processor.lexer.TokenCatalog;
 import com.example.database.processor.parser.Parser;
+import com.example.database.processor.parser.QualifiedNames;
 import com.example.database.processor.parser.TokenStream;
 import com.example.database.processor.parser.ast.AstNode;
 import com.example.database.processor.parser.ast.Expression;
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.query.SelectQuery;
 import com.example.database.processor.parser.expression.ExpressionParser;
 
@@ -12,7 +14,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * SELECT (* | expr (, expr)*) FROM ident [WHERE expr]
+ * SELECT (* | expr (, expr)*) FROM ident DOT ident [WHERE expr]
  */
 public final class SelectParser implements Parser {
 
@@ -34,7 +36,7 @@ public final class SelectParser implements Parser {
         }
 
         stream.expect(TokenCatalog.FROM);
-        String table = stream.expect(TokenCatalog.IDENTIFIER).lexeme();
+        QualifiedTable table = QualifiedNames.parseTable(stream);
 
         Expression where = null;
         if (stream.match(TokenCatalog.WHERE)) {

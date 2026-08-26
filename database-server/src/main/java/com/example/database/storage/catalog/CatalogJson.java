@@ -15,24 +15,17 @@ final class CatalogJson {
     private CatalogJson() {
     }
 
-    static byte[] toBytes(List<TableMetadata> tables) {
+    static byte[] toBytes(TableMetadata table) {
         StringBuilder json = new StringBuilder();
-        json.append("{\"tables\":[");
-        for (int t = 0; t < tables.size(); t++) {
-            if (t > 0) {
-                json.append(',');
-            }
-            appendTable(json, tables.get(t));
-        }
-        json.append("]}");
+        appendTable(json, table);
         return json.toString().getBytes(StandardCharsets.UTF_8);
     }
 
-    static List<TableMetadata> fromBytes(byte[] bytes) {
+    static TableMetadata fromBytes(byte[] bytes, String database) {
         if (bytes.length == 0) {
-            return List.of();
+            throw new CatalogException("empty catalog JSON");
         }
-        return new Reader(new String(bytes, StandardCharsets.UTF_8)).readCatalog();
+        return new Reader(new String(bytes, StandardCharsets.UTF_8)).readTable(database);
     }
 
     private static void appendTable(StringBuilder json, TableMetadata table) {
@@ -82,27 +75,16 @@ final class CatalogJson {
             this.text = text;
         }
 
-        private List<TableMetadata> readCatalog() {
+        private TableMetadata readTable(String database) {
             Object root = value();
             skipWhitespace();
             if (index != text.length()) {
                 throw new CatalogException("trailing content in catalog JSON");
             }
-            if (!(root instanceof Map<?, ?> map)) {
-                throw new CatalogException("catalog JSON must be an object");
-            }
-            Object tables = map.get("tables");
-            if (!(tables instanceof List<?> list)) {
-                throw new CatalogException("catalog JSON missing tables array");
-            }
-            List<TableMetadata> result = new ArrayList<>(list.size());
-            for (Object item : list) {
-                result.add(tableFrom(item));
-            }
-            return result;
+            return tableFrom(root, database);
         }
 
-        private TableMetadata tableFrom(Object item) {
+        private TableMetadata tableFrom(Object item, String database) {
             Map<String, Object> map = object(item, "table");
             int tableId = intField(map, "tableId");
             String name = stringField(map, "name");
@@ -114,7 +96,7 @@ final class CatalogJson {
             for (Object column : columnList) {
                 columns.add(columnFrom(column));
             }
-            return new TableMetadata(tableId, name, columns);
+            return new TableMetadata(tableId, database, name, columns);
         }
 
         private ColumnMetadata columnFrom(Object item) {

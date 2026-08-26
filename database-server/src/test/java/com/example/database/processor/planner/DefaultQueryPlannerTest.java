@@ -3,7 +3,9 @@ package com.example.database.processor.planner;
 import com.example.database.processor.analyser.AnalyzedCreateDatabase;
 import com.example.database.processor.analyser.AnalyzedCreateTable;
 import com.example.database.processor.analyser.AnalyzedDropDatabase;
+import com.example.database.processor.analyser.AnalyzedDropTable;
 import com.example.database.processor.analyser.UnresolvedQuery;
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.query.SelectQuery;
 import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.ColumnType;
@@ -25,14 +27,26 @@ class DefaultQueryPlannerTest {
                 ColumnMetadata.define("id", ColumnType.INT),
                 ColumnMetadata.define("name", ColumnType.VARCHAR)
         );
-        AnalyzedCreateTable analyzed = new AnalyzedCreateTable("users", columns);
+        AnalyzedCreateTable analyzed = new AnalyzedCreateTable("shop", "users", columns);
 
         CreateTablePlan plan = assertInstanceOf(CreateTablePlan.class, planner.plan(analyzed));
 
         assertEquals(QueryType.CREATE_TABLE, plan.queryType());
+        assertEquals("shop", plan.database());
         assertEquals("users", plan.table());
         assertEquals(columns, plan.columns());
-        assertEquals(new CreateTablePlan("users", columns), plan);
+        assertEquals(new CreateTablePlan("shop", "users", columns), plan);
+    }
+
+    @Test
+    void plansDropTable() {
+        DropTablePlan plan = assertInstanceOf(
+                DropTablePlan.class,
+                planner.plan(new AnalyzedDropTable("shop", "users"))
+        );
+        assertEquals(QueryType.DROP_TABLE, plan.queryType());
+        assertEquals("shop", plan.database());
+        assertEquals("users", plan.table());
     }
 
     @Test
@@ -55,7 +69,7 @@ class DefaultQueryPlannerTest {
     @Test
     void passesThroughUnresolvedQueries() {
         UnresolvedQuery unresolved = new UnresolvedQuery(
-                new SelectQuery(true, List.of(), "users", null)
+                new SelectQuery(true, List.of(), new QualifiedTable("shop", "users"), null)
         );
 
         UnresolvedPlan plan = assertInstanceOf(UnresolvedPlan.class, planner.plan(unresolved));

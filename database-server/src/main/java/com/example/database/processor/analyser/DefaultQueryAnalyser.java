@@ -3,12 +3,15 @@ package com.example.database.processor.analyser;
 import com.example.database.processor.parser.ast.AstNode;
 import com.example.database.processor.parser.ast.ColumnDefinition;
 import com.example.database.processor.parser.ast.ColumnSqlType;
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.query.CreateDatabaseQuery;
 import com.example.database.processor.parser.ast.query.CreateTableQuery;
 import com.example.database.processor.parser.ast.query.DropDatabaseQuery;
+import com.example.database.processor.parser.ast.query.DropTableQuery;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.ColumnType;
+import com.example.database.storage.catalog.TableMetadata;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -17,7 +20,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Semantic checks for CREATE TABLE / CREATE DATABASE / DROP DATABASE. Reads catalog; never mutates it.
+ * Semantic checks for CREATE/DROP TABLE and CREATE/DROP DATABASE. Reads catalog; never mutates it.
  */
 public final class DefaultQueryAnalyser implements QueryAnalyser {
 
@@ -33,6 +36,9 @@ public final class DefaultQueryAnalyser implements QueryAnalyser {
         if (ast instanceof CreateTableQuery createTable) {
             return analyseCreateTable(createTable);
         }
+        if (ast instanceof DropTableQuery dropTable) {
+            return analyseDropTable(dropTable);
+        }
         if (ast instanceof CreateDatabaseQuery createDatabase) {
             return analyseCreateDatabase(createDatabase);
         }
@@ -43,13 +49,18 @@ public final class DefaultQueryAnalyser implements QueryAnalyser {
     }
 
     private AnalyzedCreateTable analyseCreateTable(CreateTableQuery query) {
-        String table = query.table();
-        if (catalogManager.tableExists(table)) {
-            throw new AnalysisException("table already exists: " + table);
+        QualifiedTable target = query.table();
+        String database = target.database();
+        String table = target.table();
+        if (!catalogManager.databaseExists(database)) {
+            throw new AnalysisException("database does not exist: " + database);
+        }
+        if (catalogManager.tableExists(database, table)) {
+            throw new AnalysisException("table already exists: " + target.qualifiedName());
         }
         List<ColumnDefinition> parsedColumns = query.columns();
         if (parsedColumns.isEmpty()) {
-            throw new AnalysisException("table must have at least one column: " + table);
+            throw new AnalysisException("table must have at least one column: " + target.qualifiedName());
         }
         Set<String> seenNames = new HashSet<>();
         List<ColumnMetadata> columns = new ArrayList<>(parsedColumns.size());
@@ -59,7 +70,20 @@ public final class DefaultQueryAnalyser implements QueryAnalyser {
             }
             columns.add(ColumnMetadata.define(column.name(), toColumnType(column.type())));
         }
-        return new AnalyzedCreateTable(table, columns);
+        return new AnalyzedCreateTable(database, table, columns);
+    }
+
+    private AnalyzedDropTable analyseDropTable(DropTableQuery query) {
+        QualifiedTable target = query.table();
+        String database = target.database();
+        String table = target.table();
+        if (!catalogManager.databaseExists(database)) {
+            throw new AnalysisException("database does not exist: " + database);
+        }
+        if (!catalogManager.tableExists(database, table)) {
+            throw new AnalysisException("table does not exist: " + target.qualifiedName());
+        }
+        return new AnalyzedDropTable(database, table);
     }
 
     private AnalyzedCreateDatabase analyseCreateDatabase(CreateDatabaseQuery query) {
@@ -74,6 +98,11 @@ public final class DefaultQueryAnalyser implements QueryAnalyser {
         String database = query.name();
         if (!catalogManager.databaseExists(database)) {
             throw new AnalysisException("database does not exist: " + database);
+        }
+        for (TableMetadata table : catalogManager.allTables()) {
+            if (table.database().equals(database)) {
+                throw new AnalysisException("database is not empty: " + database);
+            }
         }
         return new AnalyzedDropDatabase(database);
     }

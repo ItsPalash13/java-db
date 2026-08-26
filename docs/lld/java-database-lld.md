@@ -60,6 +60,7 @@ classDiagram
 
     class AnalyzedCreateTable {
         <<concrete>>
+        -String database
         -String table
         -List~ColumnMetadata~ columns
     }
@@ -67,6 +68,12 @@ classDiagram
     class AnalyzedCreateDatabase {
         <<concrete>>
         -String database
+    }
+
+    class AnalyzedDropTable {
+        <<concrete>>
+        -String database
+        -String table
     }
 
     class AnalyzedDropDatabase {
@@ -87,6 +94,7 @@ classDiagram
     class QueryType {
         <<enumeration>>
         CREATE_TABLE
+        DROP_TABLE
         CREATE_DATABASE
         DROP_DATABASE
         UNRESOLVED
@@ -99,6 +107,7 @@ classDiagram
 
     class CreateTablePlan {
         <<concrete>>
+        -String database
         -String table
         -List~ColumnMetadata~ columns
     }
@@ -106,6 +115,12 @@ classDiagram
     class CreateDatabasePlan {
         <<concrete>>
         -String database
+    }
+
+    class DropTablePlan {
+        <<concrete>>
+        -String database
+        -String table
     }
 
     class DropDatabasePlan {
@@ -230,9 +245,10 @@ classDiagram
 
     class CatalogManager {
         <<interface>>
-        +getTable(String name) Optional~TableMetadata~
-        +tableExists(String name) boolean
+        +getTable(String database, String table) Optional~TableMetadata~
+        +tableExists(String database, String table) boolean
         +createTable(TableMetadata table) TableMetadata
+        +dropTable(String database, String table)
         +allTables() List~TableMetadata~
         +databaseExists(String name) boolean
         +allDatabases() List~String~
@@ -243,13 +259,14 @@ classDiagram
 
     class DefaultCatalogManager {
         <<concrete>>
-        -Map~String, TableMetadata~ tablesByName
+        -Map~String, Map~String, TableMetadata~~ tablesByDatabase
         -Set~String~ databaseNames
         -CatalogStore catalogStore
         -int nextTableId
-        +getTable(String name) Optional~TableMetadata~
-        +tableExists(String name) boolean
+        +getTable(String database, String table) Optional~TableMetadata~
+        +tableExists(String database, String table) boolean
         +createTable(TableMetadata table) TableMetadata
+        +dropTable(String database, String table)
         +allTables() List~TableMetadata~
         +databaseExists(String name) boolean
         +allDatabases() List~String~
@@ -261,9 +278,10 @@ classDiagram
     class TableMetadata {
         <<concrete>>
         -OptionalInt tableId
+        -String database
         -String name
         -List~ColumnMetadata~ columns
-        +define(String name, List~ColumnMetadata~ columns) TableMetadata
+        +define(String database, String name, List~ColumnMetadata~ columns) TableMetadata
     }
 
     class ColumnMetadata {
@@ -289,8 +307,8 @@ classDiagram
     class CatalogStore {
         <<interface>>
         +load() List~TableMetadata~
-        +saveAll(List~TableMetadata~ tables)
         +saveTable(TableMetadata table)
+        +dropTable(String database, String table)
         +loadDatabases() List~String~
         +createDatabase(String name)
         +dropDatabase(String name)
@@ -299,8 +317,8 @@ classDiagram
     class JsonCatalogStore {
         <<concrete>>
         +load() List~TableMetadata~
-        +saveAll(List~TableMetadata~ tables)
         +saveTable(TableMetadata table)
+        +dropTable(String database, String table)
         +loadDatabases() List~String~
         +createDatabase(String name)
         +dropDatabase(String name)
@@ -367,6 +385,7 @@ classDiagram
         STRING
         BOOLEAN
         NUMBER
+        DOT
         EOF
     }
 
@@ -477,9 +496,16 @@ classDiagram
         -ColumnSqlType type
     }
 
+    class QualifiedTable {
+        <<concrete>>
+        -String database
+        -String table
+        +qualifiedName() String
+    }
+
     class CreateTableQuery {
         <<concrete>>
-        -String table
+        -QualifiedTable table
         -List~ColumnDefinition~ columns
     }
 
@@ -609,21 +635,25 @@ classDiagram
     QueryAnalyser <|.. DefaultQueryAnalyser
     AnalyzedQuery <|.. AnalyzedCreateTable
     AnalyzedQuery <|.. AnalyzedCreateDatabase
+    AnalyzedQuery <|.. AnalyzedDropTable
     AnalyzedQuery <|.. AnalyzedDropDatabase
     AnalyzedQuery <|.. UnresolvedQuery
     AnalyzedCreateTable --> ColumnMetadata : columns
     QueryPlanner <|.. DefaultQueryPlanner
     ExecutionPlan <|.. CreateTablePlan
     ExecutionPlan <|.. CreateDatabasePlan
+    ExecutionPlan <|.. DropTablePlan
     ExecutionPlan <|.. DropDatabasePlan
     ExecutionPlan <|.. UnresolvedPlan
     CreateTablePlan --> ColumnMetadata : columns
     CreateTablePlan --> QueryType
     CreateDatabasePlan --> QueryType
+    DropTablePlan --> QueryType
     DropDatabasePlan --> QueryType
     UnresolvedPlan --> UnresolvedQuery : source
     DefaultQueryPlanner ..> AnalyzedCreateTable
     DefaultQueryPlanner ..> AnalyzedCreateDatabase
+    DefaultQueryPlanner ..> AnalyzedDropTable
     DefaultQueryPlanner ..> AnalyzedDropDatabase
     ExecutorService --> ExecutorRegistry
     ExecutorRegistry --> QueryExecutor
@@ -631,6 +661,7 @@ classDiagram
     CommandExecutor --> CatalogManager : writes
     CommandExecutor ..> CreateTablePlan
     CommandExecutor ..> CreateDatabasePlan
+    CommandExecutor ..> DropTablePlan
     CommandExecutor ..> DropDatabasePlan
     StorageEngine --> TableStore : owns
     StorageEngine --> IndexStore : owns
@@ -649,6 +680,7 @@ classDiagram
     Query <|.. InsertQuery
     Query <|.. DeleteQuery
     Query <|.. CreateTableQuery
+    CreateTableQuery --> QualifiedTable : table
     CreateTableQuery --> ColumnDefinition : columns
     ColumnDefinition --> ColumnSqlType : type
     AstNode <|-- Expression

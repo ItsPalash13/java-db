@@ -3,6 +3,7 @@ package com.example.database.processor.planner;
 import com.example.database.processor.analyser.AnalyzedCreateDatabase;
 import com.example.database.processor.analyser.AnalyzedCreateTable;
 import com.example.database.processor.analyser.AnalyzedDropDatabase;
+import com.example.database.processor.analyser.AnalyzedDropTable;
 import com.example.database.processor.analyser.AnalyzedQuery;
 import com.example.database.processor.analyser.UnresolvedQuery;
 
@@ -17,7 +18,10 @@ public final class DefaultQueryPlanner implements QueryPlanner {
     public ExecutionPlan plan(AnalyzedQuery analyzed) {
         Objects.requireNonNull(analyzed, "analyzed");
         if (analyzed instanceof AnalyzedCreateTable createTable) {
-            return new CreateTablePlan(createTable.table(), createTable.columns());
+            return new CreateTablePlan(createTable.database(), createTable.table(), createTable.columns());
+        }
+        if (analyzed instanceof AnalyzedDropTable dropTable) {
+            return new DropTablePlan(dropTable.database(), dropTable.table());
         }
         if (analyzed instanceof AnalyzedCreateDatabase createDatabase) {
             return new CreateDatabasePlan(createDatabase.database());

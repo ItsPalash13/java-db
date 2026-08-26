@@ -1,26 +1,27 @@
 package com.example.database.processor.parser.ast.query;
 
 import com.example.database.processor.parser.ast.ColumnDefinition;
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.Query;
 
 import java.util.List;
 import java.util.Objects;
 
 /**
- * CREATE TABLE name (column type, ...).
+ * CREATE TABLE database.table (column type, ...).
  */
 public final class CreateTableQuery implements Query {
 
-    private final String table;
+    private final QualifiedTable table;
     private final List<ColumnDefinition> columns;
 
-    public CreateTableQuery(String table, List<ColumnDefinition> columns) {
+    public CreateTableQuery(QualifiedTable table, List<ColumnDefinition> columns) {
         this.table = Objects.requireNonNull(table, "table");
         // copyOf so callers cannot mutate the AST after parse/analyse.
         this.columns = List.copyOf(Objects.requireNonNull(columns, "columns"));
     }
 
-    public String table() {
+    public QualifiedTable table() {
         return table;
     }
 

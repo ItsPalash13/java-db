@@ -1,11 +1,12 @@
 package com.example.database.processor.parser.ast.query;
 
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.Query;
 
 import java.util.Objects;
 
 /**
- * ALTER TABLE name ADD|DROP [COLUMN] column.
+ * ALTER TABLE database.table ADD|DROP [COLUMN] column.
  */
 public final class AlterTableQuery implements Query {
 
@@ -14,17 +15,17 @@ public final class AlterTableQuery implements Query {
         DROP_COLUMN
     }
 
-    private final String table;
+    private final QualifiedTable table;
     private final Action action;
     private final String column;
 
-    public AlterTableQuery(String table, Action action, String column) {
+    public AlterTableQuery(QualifiedTable table, Action action, String column) {
         this.table = Objects.requireNonNull(table, "table");
         this.action = Objects.requireNonNull(action, "action");
         this.column = Objects.requireNonNull(column, "column");
     }
 
-    public String table() {
+    public QualifiedTable table() {
         return table;
     }
 

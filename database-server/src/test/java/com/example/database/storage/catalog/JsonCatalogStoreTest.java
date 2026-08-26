@@ -7,10 +7,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JsonCatalogStoreTest {
@@ -18,25 +20,30 @@ class JsonCatalogStoreTest {
     @TempDir
     Path tempDir;
 
+    private Path storeRoot;
     private CatalogStore store;
 
     @BeforeEach
     void setUp() {
-        DataDirectory dataDirectory = new DataDirectory(tempDir.resolve("store"));
+        storeRoot = tempDir.resolve("store");
+        DataDirectory dataDirectory = new DataDirectory(storeRoot);
         dataDirectory.ensureExists();
         PhysicalStorage physicalStorage = new DefaultPhysicalStorage(dataDirectory);
         store = new JsonCatalogStore(physicalStorage);
     }
 
     @Test
-    void loadIsEmptyWhenCatalogFileIsMissing() {
+    void loadIsEmptyWhenNoTableCatalogsExist() {
+        store.createDatabase("shop");
         assertTrue(store.load().isEmpty());
     }
 
     @Test
-    void saveAllRoundTripsTablesAndIds() {
+    void saveTableRoundTripsTablesAndIds() {
+        store.createDatabase("shop");
         TableMetadata users = new TableMetadata(
                 1,
+                "shop",
                 "users",
                 List.of(
                         new ColumnMetadata(1, "id", ColumnType.INT, true),
@@ -44,22 +51,26 @@ class JsonCatalogStoreTest {
                 )
         );
 
-        store.saveAll(List.of(users));
+        store.saveTable(users);
 
+        assertTrue(Files.isRegularFile(storeRoot.resolve("shop").resolve("users").resolve("catalog.json")));
         List<TableMetadata> loaded = store.load();
         assertEquals(1, loaded.size());
         assertEquals(users, loaded.get(0));
     }
 
     @Test
-    void saveTableUpsertsByName() {
+    void saveTableUpsertsSameTableFile() {
+        store.createDatabase("shop");
         store.saveTable(new TableMetadata(
                 1,
+                "shop",
                 "users",
                 List.of(new ColumnMetadata(1, "id", ColumnType.INT, true))
         ));
         TableMetadata updated = new TableMetadata(
                 1,
+                "shop",
                 "users",
                 List.of(
                         new ColumnMetadata(1, "id", ColumnType.INT, true),
@@ -70,6 +81,37 @@ class JsonCatalogStoreTest {
         store.saveTable(updated);
 
         assertEquals(List.of(updated), store.load());
+    }
+
+    @Test
+    void dropTableRemovesCatalogFileAndDirectory() {
+        store.createDatabase("shop");
+        store.saveTable(new TableMetadata(
+                1,
+                "shop",
+                "users",
+                List.of(new ColumnMetadata(1, "id", ColumnType.INT, true))
+        ));
+
+        store.dropTable("shop", "users");
+
+        assertTrue(store.load().isEmpty());
+        assertFalse(Files.isDirectory(storeRoot.resolve("shop").resolve("users")));
+        assertTrue(Files.isDirectory(storeRoot.resolve("shop")));
+    }
+
+    @Test
+    void loadIgnoresRootCatalogJsonFile() {
+        store.createDatabase("shop");
+        Path leftover = storeRoot.resolve("catalog.json");
+        try {
+            Files.writeString(leftover, "{\"tables\":[]}");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        assertTrue(store.load().isEmpty());
+        assertEquals(List.of("shop"), store.loadDatabases());
     }
 
     @Test

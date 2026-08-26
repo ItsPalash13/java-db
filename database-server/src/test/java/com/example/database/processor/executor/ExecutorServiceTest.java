@@ -4,6 +4,7 @@ import com.example.database.processor.planner.CreateTablePlan;
 import com.example.database.processor.planner.QueryType;
 import com.example.database.processor.planner.UnresolvedPlan;
 import com.example.database.processor.analyser.UnresolvedQuery;
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.query.SelectQuery;
 import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.ColumnType;
@@ -21,24 +22,26 @@ class ExecutorServiceTest {
     @Test
     void dispatchesCreateTableToCommandExecutor() {
         DefaultCatalogManager catalog = new DefaultCatalogManager();
+        catalog.createDatabase("shop");
         ExecutorRegistry registry = new ExecutorRegistry();
         registry.register(QueryType.CREATE_TABLE, new CommandExecutor(catalog));
         ExecutorService executorService = new ExecutorService(registry);
 
         QueryResult result = executorService.execute(new CreateTablePlan(
+                "shop",
                 "users",
                 List.of(ColumnMetadata.define("id", ColumnType.INT))
         ));
 
         assertEquals("OK", result.toResponse());
-        assertTrue(catalog.tableExists("users"));
+        assertTrue(catalog.tableExists("shop", "users"));
     }
 
     @Test
     void missingExecutorIsAnExecutionError() {
         ExecutorService executorService = new ExecutorService(new ExecutorRegistry());
         UnresolvedPlan plan = new UnresolvedPlan(
-                new UnresolvedQuery(new SelectQuery(true, List.of(), "t", null))
+                new UnresolvedQuery(new SelectQuery(true, List.of(), new QualifiedTable("shop", "t"), null))
         );
 
         ExecutionException ex = assertThrows(

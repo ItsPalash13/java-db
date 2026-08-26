@@ -2,9 +2,11 @@ package com.example.database.processor.parser.statement;
 
 import com.example.database.processor.lexer.TokenCatalog;
 import com.example.database.processor.parser.Parser;
+import com.example.database.processor.parser.QualifiedNames;
 import com.example.database.processor.parser.TokenStream;
 import com.example.database.processor.parser.ast.AstNode;
 import com.example.database.processor.parser.ast.Expression;
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.query.InsertQuery;
 import com.example.database.processor.parser.expression.ExpressionParser;
 
@@ -12,7 +14,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * INSERT INTO ident [(ident (, ident)*)] VALUES (expr (, expr)*)
+ * INSERT INTO ident DOT ident [(ident (, ident)*)] VALUES (expr (, expr)*)
  */
 public final class InsertParser implements Parser {
 
@@ -22,7 +24,7 @@ public final class InsertParser implements Parser {
     public AstNode parse(TokenStream stream) {
         stream.expect(TokenCatalog.INSERT);
         stream.expect(TokenCatalog.INTO);
-        String table = stream.expect(TokenCatalog.IDENTIFIER).lexeme();
+        QualifiedTable table = QualifiedNames.parseTable(stream);
 
         List<String> columns = new ArrayList<>();
         if (stream.match(TokenCatalog.LPAREN)) {

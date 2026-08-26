@@ -120,6 +120,7 @@ public final class DefaultQueryLexer implements QueryLexer {
             case '+' -> TokenCatalog.PLUS;
             case '-' -> TokenCatalog.MINUS;
             case ',' -> TokenCatalog.COMMA;
+            case '.' -> TokenCatalog.DOT;
             case '(' -> TokenCatalog.LPAREN;
             case ')' -> TokenCatalog.RPAREN;
             case ';' -> TokenCatalog.SEMICOLON;

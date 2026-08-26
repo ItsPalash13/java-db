@@ -4,13 +4,15 @@ import com.example.database.processor.lexer.Token;
 import com.example.database.processor.lexer.TokenCatalog;
 import com.example.database.processor.parser.ParseException;
 import com.example.database.processor.parser.Parser;
+import com.example.database.processor.parser.QualifiedNames;
 import com.example.database.processor.parser.TokenStream;
 import com.example.database.processor.parser.ast.AstNode;
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.query.AlterTableQuery;
 
 /**
- * ALTER TABLE ident ADD [COLUMN] ident
- * ALTER TABLE ident DROP [COLUMN] ident
+ * ALTER TABLE ident DOT ident ADD [COLUMN] ident
+ * ALTER TABLE ident DOT ident DROP [COLUMN] ident
  */
 public final class AlterParser implements Parser {
 
@@ -18,7 +20,7 @@ public final class AlterParser implements Parser {
     public AstNode parse(TokenStream stream) {
         stream.expect(TokenCatalog.ALTER);
         stream.expect(TokenCatalog.TABLE);
-        String table = stream.expect(TokenCatalog.IDENTIFIER).lexeme();
+        QualifiedTable table = QualifiedNames.parseTable(stream);
 
         if (stream.match(TokenCatalog.ADD)) {
             stream.match(TokenCatalog.COLUMN);

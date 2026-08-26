@@ -1,6 +1,7 @@
 package com.example.database.processor.parser.ast.query;
 
 import com.example.database.processor.parser.ast.Expression;
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.Query;
 
 import java.util.List;
@@ -8,16 +9,16 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * SELECT projections FROM table [WHERE condition].
+ * SELECT projections FROM database.table [WHERE condition].
  */
 public final class SelectQuery implements Query {
 
     private final boolean star;
     private final List<Expression> projections;
-    private final String table;
+    private final QualifiedTable table;
     private final Expression where;
 
-    public SelectQuery(boolean star, List<Expression> projections, String table, Expression where) {
+    public SelectQuery(boolean star, List<Expression> projections, QualifiedTable table, Expression where) {
         this.star = star;
         this.projections = List.copyOf(Objects.requireNonNull(projections, "projections"));
         this.table = Objects.requireNonNull(table, "table");
@@ -32,7 +33,7 @@ public final class SelectQuery implements Query {
         return projections;
     }
 
-    public String table() {
+    public QualifiedTable table() {
         return table;
     }
 

@@ -47,6 +47,7 @@ public enum TokenCatalog {
     PLUS,
     MINUS,
     COMMA,
+    DOT,
     LPAREN,
     RPAREN,
     SEMICOLON,

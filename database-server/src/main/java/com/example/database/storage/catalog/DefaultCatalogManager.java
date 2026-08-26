@@ -14,16 +14,16 @@ import java.util.Set;
 
 /**
  * In-memory catalog. Owns {@link CatalogStore} when constructed with {@link PhysicalStorage}.
- * {@link #createTable} rewrites catalog.json; {@link #createDatabase} creates a folder.
+ * {@link #createTable} writes {@code db/table/catalog.json}; {@link #createDatabase} creates a folder.
  * {@link #load} fills memory on storage start.
  */
 public final class DefaultCatalogManager implements CatalogManager {
 
-    private final Map<String, TableMetadata> tablesByName = new LinkedHashMap<>();
+    private final Map<String, Map<String, TableMetadata>> tablesByDatabase = new LinkedHashMap<>();
     private final Set<String> databaseNames = new LinkedHashSet<>();
     private final CatalogStore catalogStore;
     // Plain int on purpose. AtomicInteger would only make the counter race-free;
-    // createTable also mutates the map and rewrites catalog.json. Concurrent DDL
+    // createTable also mutates the map and rewrites a catalog file. Concurrent DDL
     // is LockManager / Phase 2, which should lock the whole operation.
     private int nextTableId = 1;
 
@@ -37,27 +37,37 @@ public final class DefaultCatalogManager implements CatalogManager {
     }
 
     @Override
-    public Optional<TableMetadata> getTable(String name) {
-        Objects.requireNonNull(name, "name");
-        return Optional.ofNullable(tablesByName.get(name));
+    public Optional<TableMetadata> getTable(String database, String table) {
+        Objects.requireNonNull(database, "database");
+        Objects.requireNonNull(table, "table");
+        Map<String, TableMetadata> tables = tablesByDatabase.get(database);
+        if (tables == null) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(tables.get(table));
     }
 
     @Override
-    public boolean tableExists(String name) {
-        Objects.requireNonNull(name, "name");
-        return tablesByName.containsKey(name);
+    public boolean tableExists(String database, String table) {
+        return getTable(database, table).isPresent();
     }
 
     @Override
     public TableMetadata createTable(TableMetadata table) {
         Objects.requireNonNull(table, "table");
+        String database = table.database();
         String name = table.name();
-        if (tablesByName.containsKey(name)) {
-            throw new CatalogException("table already exists: " + name);
+        requireFolderName(database, "database");
+        requireFolderName(name, "table");
+        if (!databaseNames.contains(database)) {
+            throw new CatalogException("database does not exist: " + database);
+        }
+        if (tableExists(database, name)) {
+            throw new CatalogException("table already exists: " + table.qualifiedName());
         }
         List<ColumnMetadata> columns = table.columns();
         if (columns.isEmpty()) {
-            throw new CatalogException("table must have at least one column: " + name);
+            throw new CatalogException("table must have at least one column: " + table.qualifiedName());
         }
         Set<String> seen = new HashSet<>();
         List<ColumnMetadata> assignedColumns = new ArrayList<>(columns.size());
@@ -70,22 +80,49 @@ public final class DefaultCatalogManager implements CatalogManager {
         }
         int tableId = nextTableId;
         TableMetadata created = table.withAssignedIds(tableId, assignedColumns);
-        tablesByName.put(name, created);
+        tablesIn(database).put(name, created);
         nextTableId = tableId + 1;
         try {
-            persist();
+            persistSaveTable(created);
         } catch (RuntimeException e) {
-            // Disk write failed: drop the in-memory table so memory and catalog.json stay aligned.
-            tablesByName.remove(name);
+            // Disk write failed: drop the in-memory table so memory and files stay aligned.
+            removeTableFromMemory(database, name);
             nextTableId = tableId;
+            if (catalogStore != null) {
+                try {
+                    catalogStore.dropTable(database, name);
+                } catch (RuntimeException ignored) {
+                    // Best-effort cleanup of a partial shop/users/ directory.
+                }
+            }
             throw e;
         }
         return created;
     }
 
     @Override
+    public void dropTable(String database, String table) {
+        requireFolderName(database, "database");
+        requireFolderName(table, "table");
+        TableMetadata existing = getTable(database, table).orElseThrow(
+                () -> new CatalogException("table does not exist: " + database + "." + table)
+        );
+        removeTableFromMemory(database, table);
+        try {
+            persistDropTable(database, table);
+        } catch (RuntimeException e) {
+            tablesIn(database).put(table, existing);
+            throw e;
+        }
+    }
+
+    @Override
     public List<TableMetadata> allTables() {
-        return List.copyOf(tablesByName.values());
+        List<TableMetadata> tables = new ArrayList<>();
+        for (Map<String, TableMetadata> perDatabase : tablesByDatabase.values()) {
+            tables.addAll(perDatabase.values());
+        }
+        return List.copyOf(tables);
     }
 
     @Override
@@ -101,7 +138,7 @@ public final class DefaultCatalogManager implements CatalogManager {
 
     @Override
     public void createDatabase(String name) {
-        requireDatabaseName(name);
+        requireFolderName(name, "database");
         if (databaseNames.contains(name)) {
             throw new CatalogException("database already exists: " + name);
         }
@@ -116,11 +153,16 @@ public final class DefaultCatalogManager implements CatalogManager {
 
     @Override
     public void dropDatabase(String name) {
-        requireDatabaseName(name);
+        requireFolderName(name, "database");
         if (!databaseNames.contains(name)) {
             throw new CatalogException("database does not exist: " + name);
         }
+        Map<String, TableMetadata> tables = tablesByDatabase.get(name);
+        if (tables != null && !tables.isEmpty()) {
+            throw new CatalogException("database is not empty: " + name);
+        }
         databaseNames.remove(name);
+        tablesByDatabase.remove(name);
         try {
             persistDropDatabase(name);
         } catch (RuntimeException e) {
@@ -134,34 +176,57 @@ public final class DefaultCatalogManager implements CatalogManager {
         if (catalogStore == null) {
             return;
         }
-        replaceAll(catalogStore.load());
+        tablesByDatabase.clear();
         databaseNames.clear();
         databaseNames.addAll(catalogStore.loadDatabases());
+        replaceAll(catalogStore.load());
     }
 
     void replaceAll(List<TableMetadata> tables) {
         Objects.requireNonNull(tables, "tables");
-        tablesByName.clear();
+        tablesByDatabase.clear();
         int maxTableId = 0;
         for (TableMetadata table : tables) {
             if (table.tableId().isEmpty()) {
-                throw new CatalogException("restored table missing tableId: " + table.name());
+                throw new CatalogException("restored table missing tableId: " + table.qualifiedName());
             }
-            if (tablesByName.containsKey(table.name())) {
-                throw new CatalogException("duplicate table name: " + table.name());
+            if (tableExists(table.database(), table.name())) {
+                throw new CatalogException("duplicate table name: " + table.qualifiedName());
             }
-            tablesByName.put(table.name(), table);
+            tablesIn(table.database()).put(table.name(), table);
             maxTableId = Math.max(maxTableId, table.tableId().getAsInt());
         }
         // Continue ids after the highest stored table so a new CREATE TABLE does not collide.
         nextTableId = maxTableId + 1;
     }
 
-    private void persist() {
+    private Map<String, TableMetadata> tablesIn(String database) {
+        return tablesByDatabase.computeIfAbsent(database, key -> new LinkedHashMap<>());
+    }
+
+    private void removeTableFromMemory(String database, String table) {
+        Map<String, TableMetadata> tables = tablesByDatabase.get(database);
+        if (tables == null) {
+            return;
+        }
+        tables.remove(table);
+        if (tables.isEmpty()) {
+            tablesByDatabase.remove(database);
+        }
+    }
+
+    private void persistSaveTable(TableMetadata table) {
         if (catalogStore == null) {
             return;
         }
-        catalogStore.saveAll(allTables());
+        catalogStore.saveTable(table);
+    }
+
+    private void persistDropTable(String database, String table) {
+        if (catalogStore == null) {
+            return;
+        }
+        catalogStore.dropTable(database, table);
     }
 
     private void persistCreateDatabase(String name) {
@@ -178,15 +243,15 @@ public final class DefaultCatalogManager implements CatalogManager {
         catalogStore.dropDatabase(name);
     }
 
-    private static void requireDatabaseName(String name) {
-        Objects.requireNonNull(name, "name");
+    private static void requireFolderName(String name, String kind) {
+        Objects.requireNonNull(name, kind);
         if (name.isBlank()) {
-            throw new CatalogException("database name must not be blank");
+            throw new CatalogException(kind + " name must not be blank");
         }
-        // CatalogStore uses the name as a relative path; reject separators so CREATE
+        // CatalogStore uses the name as a relative path segment; reject separators so CREATE
         // cannot write outside a single folder under the store root.
         if (name.contains("/") || name.contains("\\") || name.contains("..")) {
-            throw new CatalogException("invalid database name: " + name);
+            throw new CatalogException("invalid " + kind + " name: " + name);
         }
     }
 }

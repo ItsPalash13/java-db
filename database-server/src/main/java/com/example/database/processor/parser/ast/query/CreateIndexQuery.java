@@ -1,20 +1,21 @@
 package com.example.database.processor.parser.ast.query;
 
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.Query;
 
 import java.util.List;
 import java.util.Objects;
 
 /**
- * CREATE INDEX name ON table (columns).
+ * CREATE INDEX name ON database.table (columns).
  */
 public final class CreateIndexQuery implements Query {
 
     private final String index;
-    private final String table;
+    private final QualifiedTable table;
     private final List<String> columns;
 
-    public CreateIndexQuery(String index, String table, List<String> columns) {
+    public CreateIndexQuery(String index, QualifiedTable table, List<String> columns) {
         this.index = Objects.requireNonNull(index, "index");
         this.table = Objects.requireNonNull(table, "table");
         this.columns = List.copyOf(Objects.requireNonNull(columns, "columns"));
@@ -24,7 +25,7 @@ public final class CreateIndexQuery implements Query {
         return index;
     }
 
-    public String table() {
+    public QualifiedTable table() {
         return table;
     }
 

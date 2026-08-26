@@ -43,6 +43,7 @@ class DefaultStorageEngineTest {
     void createTableSurvivesRestart() {
         Path root = tempDir.resolve("store");
         TableMetadata users = TableMetadata.define(
+                "shop",
                 "users",
                 List.of(
                         ColumnMetadata.define("id", ColumnType.INT),
@@ -54,6 +55,7 @@ class DefaultStorageEngineTest {
         first.start();
         try {
             CatalogManager catalog = first.catalogManager();
+            catalog.createDatabase("shop");
             TableMetadata created = catalog.createTable(users);
             assertEquals(1, created.tableId().orElseThrow());
             assertEquals(ColumnType.INT, created.columns().get(0).type());
@@ -65,8 +67,9 @@ class DefaultStorageEngineTest {
         DefaultStorageEngine second = new DefaultStorageEngine(new DataDirectory(root));
         second.start();
         try {
-            TableMetadata loaded = second.catalogManager().getTable("users").orElseThrow();
+            TableMetadata loaded = second.catalogManager().getTable("shop", "users").orElseThrow();
             assertEquals(1, loaded.tableId().orElseThrow());
+            assertEquals("shop", loaded.database());
             assertEquals("users", loaded.name());
             assertEquals(2, loaded.columns().size());
             assertEquals("id", loaded.columns().get(0).name());

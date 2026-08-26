@@ -259,6 +259,21 @@ class DefaultQueryLexerTest {
     }
 
     @Test
+    void tokenizesQualifiedTableName() {
+        assertKinds(
+                "shop.users",
+                TokenCatalog.IDENTIFIER,
+                TokenCatalog.DOT,
+                TokenCatalog.IDENTIFIER,
+                TokenCatalog.EOF
+        );
+        List<Token> tokens = lexer.tokenize("FROM shop.users");
+        assertEquals("shop", tokens.get(1).lexeme());
+        assertEquals(".", tokens.get(2).lexeme());
+        assertEquals("users", tokens.get(3).lexeme());
+    }
+
+    @Test
     void tokenizesEmptyAndWhitespaceAsEofOnly() {
         assertKinds("", TokenCatalog.EOF);
         assertKinds("   \t\n  ", TokenCatalog.EOF);

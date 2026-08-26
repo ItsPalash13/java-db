@@ -31,7 +31,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Lex → parse → analyse → plan → execute. CREATE TABLE, CREATE DATABASE, and DROP DATABASE
+ * Lex → parse → analyse → plan → execute. CREATE/DROP TABLE and CREATE/DROP DATABASE
  * write the catalog; other statements still echo {@code OK <query>} until their own executor branches.
  */
 public final class DefaultQueryProcessor implements QueryProcessor {
@@ -123,6 +123,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             ExecutorRegistry registry = new ExecutorRegistry();
             CommandExecutor commands = new CommandExecutor(storageEngine.catalogManager());
             registry.register(QueryType.CREATE_TABLE, commands);
+            registry.register(QueryType.DROP_TABLE, commands);
             registry.register(QueryType.CREATE_DATABASE, commands);
             registry.register(QueryType.DROP_DATABASE, commands);
             executorService = new ExecutorService(registry);

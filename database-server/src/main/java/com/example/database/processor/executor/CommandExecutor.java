@@ -3,6 +3,7 @@ package com.example.database.processor.executor;
 import com.example.database.processor.planner.CreateDatabasePlan;
 import com.example.database.processor.planner.CreateTablePlan;
 import com.example.database.processor.planner.DropDatabasePlan;
+import com.example.database.processor.planner.DropTablePlan;
 import com.example.database.processor.planner.ExecutionPlan;
 import com.example.database.storage.catalog.CatalogException;
 import com.example.database.storage.catalog.CatalogManager;
@@ -29,8 +30,16 @@ public final class CommandExecutor implements QueryExecutor {
             if (plan instanceof CreateTablePlan createTable) {
                 // Ids are assigned here, not in the planner. Persist is inside createTable.
                 catalogManager.createTable(
-                        TableMetadata.define(createTable.table(), createTable.columns())
+                        TableMetadata.define(
+                                createTable.database(),
+                                createTable.table(),
+                                createTable.columns()
+                        )
                 );
+                return QueryResult.ok();
+            }
+            if (plan instanceof DropTablePlan dropTable) {
+                catalogManager.dropTable(dropTable.database(), dropTable.table());
                 return QueryResult.ok();
             }
             if (plan instanceof CreateDatabasePlan createDatabase) {

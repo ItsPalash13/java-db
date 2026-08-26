@@ -10,15 +10,21 @@ import java.util.Objects;
  */
 public final class AnalyzedCreateTable implements AnalyzedQuery {
 
+    private final String database;
     private final String table;
     private final List<ColumnMetadata> columns;
 
-    public AnalyzedCreateTable(String table, List<ColumnMetadata> columns) {
+    public AnalyzedCreateTable(String database, String table, List<ColumnMetadata> columns) {
+        this.database = Objects.requireNonNull(database, "database");
         this.table = Objects.requireNonNull(table, "table");
         this.columns = List.copyOf(Objects.requireNonNull(columns, "columns"));
         if (columns.isEmpty()) {
             throw new IllegalArgumentException("columns must not be empty");
         }
+    }
+
+    public String database() {
+        return database;
     }
 
     public String table() {
@@ -31,6 +37,6 @@ public final class AnalyzedCreateTable implements AnalyzedQuery {
 
     @Override
     public String toString() {
-        return "AnalyzedCreateTable{table=" + table + ", columns=" + columns + "}";
+        return "AnalyzedCreateTable{database=" + database + ", table=" + table + ", columns=" + columns + "}";
     }
 }

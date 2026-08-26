@@ -52,11 +52,12 @@ DefaultQueryAnalyser
 
 <<interface>>
 AnalyzedQuery
-<<sealed>> permits AnalyzedCreateTable, AnalyzedCreateDatabase, AnalyzedDropDatabase, UnresolvedQuery
+<<sealed>> permits AnalyzedCreateTable, AnalyzedCreateDatabase, AnalyzedDropTable, AnalyzedDropDatabase, UnresolvedQuery
 
 
 <<concrete>>
 AnalyzedCreateTable
+- database: String
 - table: String
 - columns: List<ColumnMetadata>   // no ids yet; nullable defaults true
 
@@ -64,6 +65,12 @@ AnalyzedCreateTable
 <<concrete>>
 AnalyzedCreateDatabase
 - database: String
+
+
+<<concrete>>
+AnalyzedDropTable
+- database: String
+- table: String
 
 
 <<concrete>>
@@ -83,17 +90,18 @@ AnalysisException
 
 <<enumeration>>
 QueryType
-CREATE_TABLE, CREATE_DATABASE, DROP_DATABASE, UNRESOLVED
+CREATE_TABLE, DROP_TABLE, CREATE_DATABASE, DROP_DATABASE, UNRESOLVED
 
 
 <<interface>>
 ExecutionPlan
-<<sealed>> permits CreateTablePlan, CreateDatabasePlan, DropDatabasePlan, UnresolvedPlan
+<<sealed>> permits CreateTablePlan, CreateDatabasePlan, DropTablePlan, DropDatabasePlan, UnresolvedPlan
 + queryType(): QueryType
 
 
 <<concrete>>
 CreateTablePlan
+- database: String
 - table: String
 - columns: List<ColumnMetadata>   // no ids yet; catalog assigns on execute
 
@@ -101,6 +109,12 @@ CreateTablePlan
 <<concrete>>
 CreateDatabasePlan
 - database: String
+
+
+<<concrete>>
+DropTablePlan
+- database: String
+- table: String
 
 
 <<concrete>>
@@ -145,7 +159,7 @@ QueryExecutor
 CommandExecutor
 - catalogManager: CatalogManager
 + execute(plan: ExecutionPlan): QueryResult
-    // CREATE_TABLE / CREATE_DATABASE / DROP_DATABASE; writes catalog; not Volcano
+    // CREATE_TABLE / DROP_TABLE / CREATE_DATABASE / DROP_DATABASE; writes catalog; not Volcano
 
 
 <<concrete>>
@@ -177,38 +191,39 @@ LockManager, TransactionManager, WALManager, BufferPool
 CatalogManager
 owns table/schema metadata and database folder names
 owns CatalogStore (JSON + directories); callers never see catalog.json
-+ getTable(name: String): Optional<TableMetadata>
-+ tableExists(name: String): boolean
++ getTable(database: String, table: String): Optional<TableMetadata>
++ tableExists(database: String, table: String): boolean
 + createTable(table: TableMetadata): TableMetadata
-    // assigns tableId/columnId from 1; ignores incoming ids
-    // persists via owned CatalogStore when constructed with PhysicalStorage
-    // throws CatalogException: duplicate table, duplicate column, empty columns
+    // requires databaseExists; assigns tableId/columnId from 1; ignores incoming ids
+    // persists one file via owned CatalogStore when constructed with PhysicalStorage
+    // throws CatalogException: missing database, duplicate table, duplicate column, empty columns
++ dropTable(database: String, table: String)
 + allTables(): List<TableMetadata>
 + databaseExists(name: String): boolean
 + allDatabases(): List<String>
 + createDatabase(name: String)
 + dropDatabase(name: String)
-    // empty directory only
+    // fails if the database still has tables; empty directory only
 + load()
-    // start-up: tables from catalog.json; database names from subdirectories
+    // start-up: tables from data/<db>/<table>/catalog.json; database names from subdirectories
 
 
 <<concrete>>
 DefaultCatalogManager
-- tablesByName: Map<String, TableMetadata>
+- tablesByDatabase: Map<String, Map<String, TableMetadata>>
 - databaseNames: Set<String>
 - catalogStore: CatalogStore   // null in memory-only tests; JsonCatalogStore when given PhysicalStorage
-- nextTableId: int
-+ getTable / tableExists / createTable / allTables
+- nextTableId: int             // global across databases
++ getTable / tableExists / createTable / dropTable / allTables
 + databaseExists / allDatabases / createDatabase / dropDatabase / load
 
 
 <<interface>>
 CatalogStore
-catalog persistence (JSON + database directories); PhysicalStorage sees bytes/paths only
-+ load(): List<TableMetadata>          // empty if catalog.json missing
-+ saveAll(tables: List<TableMetadata>) // rewrite whole file
-+ saveTable(table: TableMetadata)      // upsert by name, then rewrite
+catalog persistence (per-table JSON + database directories); PhysicalStorage sees bytes/paths only
++ load(): List<TableMetadata>          // walk db/table/catalog.json; ignore root catalog.json
++ saveTable(table: TableMetadata)      // write data/<db>/<table>/catalog.json
++ dropTable(database: String, table: String)
 + loadDatabases(): List<String>
 + createDatabase(name: String)
 + dropDatabase(name: String)
@@ -217,17 +232,19 @@ catalog persistence (JSON + database directories); PhysicalStorage sees bytes/pa
 <<concrete>>
 JsonCatalogStore
 - physicalStorage: PhysicalStorage
-catalog file: catalog.json at DataDirectory root
+catalog file: <database>/<table>/catalog.json
 database dirs: <name>/ under store root
-+ load / saveAll / saveTable / loadDatabases / createDatabase / dropDatabase
++ load / saveTable / dropTable / loadDatabases / createDatabase / dropDatabase
 
 
 <<concrete>>
 TableMetadata
 - tableId: OptionalInt   // empty until createTable assigns
+- database: String
 - name: String
 - columns: List<ColumnMetadata>
-+ define(name, columns): TableMetadata
++ define(database, name, columns): TableMetadata
++ qualifiedName(): String   // shop.users
 
 
 <<concrete>>
@@ -248,7 +265,7 @@ INT, VARCHAR, BOOLEAN
 <<concrete>>
 CatalogException extends RuntimeException
 duplicate table / duplicate column / empty column list
-duplicate database / missing database / directory not empty
+duplicate database / missing database / database not empty / missing table
 
 
 <<interface>>
@@ -367,7 +384,7 @@ INTO, FROM, SET, VALUES, WHERE,
 INT, VARCHAR, BOOLEAN_TYPE,
 IDENTIFIER, STRING, BOOLEAN, NUMBER,
 STAR, GT, LT, GTE, LTE, EQ, NEQ, SLASH, PLUS, MINUS,
-COMMA, LPAREN, RPAREN, SEMICOLON, EOF
+COMMA, DOT, LPAREN, RPAREN, SEMICOLON, EOF
 
 
 <<concrete>>
@@ -445,8 +462,15 @@ ColumnDefinition
 
 
 <<concrete>>
-CreateTableQuery
+QualifiedTable
+- database: String
 - table: String
++ qualifiedName(): String
+
+
+<<concrete>>
+CreateTableQuery
+- table: QualifiedTable
 - columns: List<ColumnDefinition>
 
 
@@ -538,7 +562,7 @@ DatabaseServer
       │              │         └── DefaultPhysicalStorage (uses DataDirectory)
       │              ├── CatalogManager
       │              │         └── DefaultCatalogManager
-      │              │               ├── CatalogStore (JsonCatalogStore, catalog.json)
+      │              │               ├── CatalogStore (JsonCatalogStore, db/table/catalog.json)
       │              │               │         └── uses PhysicalStorage
       │              │               └── TableMetadata → ColumnMetadata → ColumnType
       │              └── (later) TableStore, IndexStore,
@@ -550,9 +574,9 @@ DatabaseServer
       │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
       │                        ├── owns ▶ QueryParser (DefaultQueryParser)
       │                        ├── per query ▶ QueryAnalyser (DefaultQueryAnalyser + CatalogManager)
-      │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → CreateTablePlan / CreateDatabasePlan / DropDatabasePlan)
+      │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → CreateTablePlan / DropTablePlan / CreateDatabasePlan / DropDatabasePlan)
       │                        ├── ExecutorService → ExecutorRegistry
-      │                        │         └── CREATE_TABLE / CREATE_DATABASE / DROP_DATABASE → CommandExecutor → CatalogManager (write)
+      │                        │         └── CREATE_TABLE / DROP_TABLE / CREATE_DATABASE / DROP_DATABASE → CommandExecutor → CatalogManager (write)
       │                        │              ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
       │                        │              └── AstNode (Query / Expression)
       │                        └── uses ▶ StorageEngine (shared)
@@ -565,7 +589,7 @@ Design note:
 DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProcessor (no lifecycle).
 NetworkModule owns RequestHandler.
 DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryPlanner; builds DefaultQueryAnalyser and ExecutorService on first catalog use from StorageEngine.catalogManager() (requires start()). Uses StorageEngine (does not own its lifecycle).
-execute() lexes, parses, analyses, plans, then runs CREATE TABLE / CREATE DATABASE / DROP DATABASE through ExecutorService. Unresolved plans still echo OK <query>.
+execute() lexes, parses, analyses, plans, then runs CREATE/DROP TABLE and CREATE/DROP DATABASE through ExecutorService. Table names are database.table. Unresolved plans still echo OK <query>.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.processor.lexer (unchanged names).
 Parser types live under com.example.database.processor.parser.
@@ -577,11 +601,13 @@ java.net.Socket classes stay inside the TCP implementations.
 Catalog (Phase 1.1–1.3):
 CatalogManager is a StorageEngine submodule and owns CatalogStore.
 DefaultStorageEngine constructs PhysicalStorage and DefaultCatalogManager(physicalStorage).
-start() calls catalogManager.load() — the engine does not touch catalog.json.
-createTable assigns ids and rewrites catalog.json. Restart: new engine, start, getTable("users").
-CREATE DATABASE creates data/<name>/; DROP DATABASE removes an empty directory. load() also lists those directories.
-CREATE TABLE via SQL (Phase 1.8): processor.execute then a new StorageEngine on the same dir; getTable is the same; a second CREATE is an error.
-CatalogStore owns JSON and database directory names; PhysicalStorage owns bytes.
+start() calls catalogManager.load() — the engine does not touch catalog files.
+createTable assigns ids and writes data/<db>/<table>/catalog.json. Restart: new engine, start, getTable("shop","users").
+CREATE DATABASE creates data/<name>/; DROP DATABASE removes an empty directory (fails if tables remain). load() lists those directories and per-table catalogs.
+CREATE TABLE via SQL: CREATE DATABASE shop then CREATE TABLE shop.users (...); processor.execute then a new StorageEngine on the same dir; getTable is the same; a second CREATE is an error.
+DROP TABLE shop.users deletes the table catalog file and empty table folder.
+Root data/catalog.json is not read or written.
+CatalogStore owns JSON and path layout; PhysicalStorage owns bytes.
 
 PhysicalStorage (Phase 1.2):
 PhysicalStorage is a StorageEngine submodule. DefaultPhysicalStorage is filesystem bytes under DataDirectory.

@@ -2,12 +2,14 @@ package com.example.database.processor.parser.statement;
 
 import com.example.database.processor.lexer.Token;
 import com.example.database.processor.lexer.TokenCatalog;
+import com.example.database.processor.parser.QualifiedNames;
 import com.example.database.processor.parser.ParseException;
 import com.example.database.processor.parser.Parser;
 import com.example.database.processor.parser.TokenStream;
 import com.example.database.processor.parser.ast.AstNode;
 import com.example.database.processor.parser.ast.ColumnDefinition;
 import com.example.database.processor.parser.ast.ColumnSqlType;
+import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.query.CreateDatabaseQuery;
 import com.example.database.processor.parser.ast.query.CreateIndexQuery;
 import com.example.database.processor.parser.ast.query.CreateTableQuery;
@@ -17,8 +19,8 @@ import java.util.List;
 
 /**
  * CREATE DATABASE ident
- * CREATE TABLE ident (ident type (, ident type)*)
- * CREATE INDEX ident ON ident (ident (, ident)*)
+ * CREATE TABLE ident DOT ident (ident type (, ident type)*)
+ * CREATE INDEX ident ON ident DOT ident (ident (, ident)*)
  */
 public final class CreateParser implements Parser {
 
@@ -32,7 +34,7 @@ public final class CreateParser implements Parser {
         }
 
         if (stream.match(TokenCatalog.TABLE)) {
-            String table = stream.expect(TokenCatalog.IDENTIFIER).lexeme();
+            QualifiedTable table = QualifiedNames.parseTable(stream);
             stream.expect(TokenCatalog.LPAREN);
             List<ColumnDefinition> columns = parseColumnDefinitions(stream);
             stream.expect(TokenCatalog.RPAREN);
@@ -42,7 +44,7 @@ public final class CreateParser implements Parser {
         if (stream.match(TokenCatalog.INDEX)) {
             String index = stream.expect(TokenCatalog.IDENTIFIER).lexeme();
             stream.expect(TokenCatalog.ON);
-            String table = stream.expect(TokenCatalog.IDENTIFIER).lexeme();
+            QualifiedTable table = QualifiedNames.parseTable(stream);
             stream.expect(TokenCatalog.LPAREN);
             List<String> columns = parseIndexColumnList(stream);
             stream.expect(TokenCatalog.RPAREN);

@@ -168,6 +168,14 @@ class DefaultPhysicalStorageTest {
     }
 
     @Test
+    void nestedCatalogJsonRequiresParentDirectory() {
+        storage.createDirectory("shop/users");
+        storage.create("shop/users/catalog.json");
+        assertTrue(storage.exists("shop/users/catalog.json"));
+        assertEquals(List.of("users"), storage.listDirectories("shop"));
+    }
+
+    @Test
     void directoryOpsRejectPathEscape() {
         assertThrows(IllegalArgumentException.class, () -> storage.createDirectory("../outside"));
         assertThrows(IllegalArgumentException.class, () -> storage.listDirectories(".."));
