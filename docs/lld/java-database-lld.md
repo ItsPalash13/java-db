@@ -37,6 +37,8 @@ classDiagram
         <<concrete>>
         -QueryLexer lexer
         -QueryParser parser
+        -QueryPlanner planner
+        -ExecutorService executorService
         -StorageEngine storageEngine
         +execute(String query) String
     }
@@ -70,6 +72,73 @@ classDiagram
     class AnalysisException {
         <<concrete>>
         +toResponse() String
+    }
+
+    class QueryType {
+        <<enumeration>>
+        CREATE_TABLE
+        UNRESOLVED
+    }
+
+    class ExecutionPlan {
+        <<interface>>
+        +queryType() QueryType
+    }
+
+    class CreateTablePlan {
+        <<concrete>>
+        -String table
+        -List~ColumnMetadata~ columns
+    }
+
+    class UnresolvedPlan {
+        <<concrete>>
+        -UnresolvedQuery source
+    }
+
+    class QueryPlanner {
+        <<interface>>
+        +plan(AnalyzedQuery analyzed) ExecutionPlan
+    }
+
+    class DefaultQueryPlanner {
+        <<concrete>>
+        +plan(AnalyzedQuery analyzed) ExecutionPlan
+    }
+
+    class QueryResult {
+        <<concrete>>
+        -String message
+        +ok() QueryResult
+        +toResponse() String
+    }
+
+    class ExecutionException {
+        <<concrete>>
+        +toResponse() String
+    }
+
+    class QueryExecutor {
+        <<interface>>
+        +execute(ExecutionPlan plan) QueryResult
+    }
+
+    class CommandExecutor {
+        <<concrete>>
+        -CatalogManager catalogManager
+        +execute(ExecutionPlan plan) QueryResult
+    }
+
+    class ExecutorRegistry {
+        <<concrete>>
+        +register(QueryType type, QueryExecutor executor)
+        +get(QueryType type) QueryExecutor
+    }
+
+    class ExecutorService {
+        <<concrete>>
+        -ExecutorRegistry registry
+        +execute(ExecutionPlan plan) QueryResult
     }
 
     class StorageEngine {
@@ -490,12 +559,26 @@ classDiagram
     DefaultRequestHandler --> QueryProcessor : queryProcessor
     DefaultQueryProcessor --> QueryLexer : owns
     DefaultQueryProcessor --> QueryParser : owns
+    DefaultQueryProcessor --> QueryPlanner : owns
+    DefaultQueryProcessor --> ExecutorService : owns
     DefaultQueryProcessor --> StorageEngine : uses
     DefaultQueryAnalyser --> CatalogManager : reads
     QueryAnalyser <|.. DefaultQueryAnalyser
     AnalyzedQuery <|.. AnalyzedCreateTable
     AnalyzedQuery <|.. UnresolvedQuery
     AnalyzedCreateTable --> ColumnMetadata : columns
+    QueryPlanner <|.. DefaultQueryPlanner
+    ExecutionPlan <|.. CreateTablePlan
+    ExecutionPlan <|.. UnresolvedPlan
+    CreateTablePlan --> ColumnMetadata : columns
+    CreateTablePlan --> QueryType
+    UnresolvedPlan --> UnresolvedQuery : source
+    DefaultQueryPlanner ..> AnalyzedCreateTable
+    ExecutorService --> ExecutorRegistry
+    ExecutorRegistry --> QueryExecutor
+    QueryExecutor <|.. CommandExecutor
+    CommandExecutor --> CatalogManager : writes
+    CommandExecutor ..> CreateTablePlan
     StorageEngine --> TableStore : owns
     StorageEngine --> IndexStore : owns
     StorageEngine --> LockManager : owns

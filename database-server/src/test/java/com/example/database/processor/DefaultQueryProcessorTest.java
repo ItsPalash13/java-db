@@ -49,13 +49,29 @@ class DefaultQueryProcessorTest {
     }
 
     @Test
-    void executeReturnsOkForCreateAlterDropInsertUpdateDelete() {
+    void executeCreateTableWritesCatalogAndRejectsDuplicates() {
         DefaultQueryProcessor processor = newProcessor();
-        assertEquals("OK CREATE DATABASE mydb", processor.execute("CREATE DATABASE mydb"));
+
+        assertEquals("OK", processor.execute("CREATE TABLE users (id INT, name VARCHAR)"));
+
+        TableMetadata users = processor.storageEngine().catalogManager().getTable("users").orElseThrow();
+        assertEquals("users", users.name());
+        assertEquals(2, users.columns().size());
+        assertEquals("id", users.columns().get(0).name());
+        assertEquals(ColumnType.INT, users.columns().get(0).type());
+        assertEquals("name", users.columns().get(1).name());
+        assertEquals(ColumnType.VARCHAR, users.columns().get(1).type());
+
         assertEquals(
-                "OK CREATE TABLE users (id INT, name VARCHAR)",
+                "ERROR: table already exists: users",
                 processor.execute("CREATE TABLE users (id INT, name VARCHAR)")
         );
+    }
+
+    @Test
+    void executeReturnsOkForUnresolvedCreateAlterDropInsertUpdateDelete() {
+        DefaultQueryProcessor processor = newProcessor();
+        assertEquals("OK CREATE DATABASE mydb", processor.execute("CREATE DATABASE mydb"));
         assertEquals(
                 "OK CREATE INDEX idx ON users (id)",
                 processor.execute("CREATE INDEX idx ON users (id)")

@@ -4,6 +4,11 @@ import com.example.database.processor.analyser.AnalysisException;
 import com.example.database.processor.analyser.AnalyzedQuery;
 import com.example.database.processor.analyser.DefaultQueryAnalyser;
 import com.example.database.processor.analyser.QueryAnalyser;
+import com.example.database.processor.executor.CommandExecutor;
+import com.example.database.processor.executor.ExecutionException;
+import com.example.database.processor.executor.ExecutorRegistry;
+import com.example.database.processor.executor.ExecutorService;
+import com.example.database.processor.executor.QueryResult;
 import com.example.database.processor.lexer.DefaultQueryLexer;
 import com.example.database.processor.lexer.LexException;
 import com.example.database.processor.lexer.QueryLexer;
@@ -12,6 +17,11 @@ import com.example.database.processor.parser.DefaultQueryParser;
 import com.example.database.processor.parser.ParseException;
 import com.example.database.processor.parser.QueryParser;
 import com.example.database.processor.parser.ast.AstNode;
+import com.example.database.processor.planner.DefaultQueryPlanner;
+import com.example.database.processor.planner.ExecutionPlan;
+import com.example.database.processor.planner.QueryPlanner;
+import com.example.database.processor.planner.QueryType;
+import com.example.database.processor.planner.UnresolvedPlan;
 import com.example.database.storage.DataDirectory;
 import com.example.database.storage.DefaultStorageEngine;
 import com.example.database.storage.StorageEngine;
@@ -21,16 +31,16 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Default query processor stub: lexes, parses, analyses, then echoes {@code OK <query>}.
- * Owns {@link QueryLexer} and {@link QueryParser}; builds {@link QueryAnalyser} per query
- * from {@link StorageEngine#catalogManager()} (storage must be started before {@code execute}).
- * Lex and parse errors are returned as a response with the exact index.
+ * Lex → parse → analyse → plan → execute. CREATE TABLE writes the catalog;
+ * other statements still echo {@code OK <query>} until their own executor branches.
  */
 public final class DefaultQueryProcessor implements QueryProcessor {
 
     private final QueryLexer lexer;
     private final QueryParser parser;
+    private final QueryPlanner planner;
     private final StorageEngine storageEngine;
+    private ExecutorService executorService;
 
     public DefaultQueryProcessor() {
         this(new DefaultStorageEngine(DataDirectory.defaults()));
@@ -43,6 +53,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
     public DefaultQueryProcessor(StorageEngine storageEngine) {
         this.lexer = new DefaultQueryLexer();
         this.parser = new DefaultQueryParser();
+        this.planner = new DefaultQueryPlanner();
         this.storageEngine = Objects.requireNonNull(storageEngine, "storageEngine");
     }
 
@@ -86,8 +97,36 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             return error;
         }
         System.out.println("[QueryProcessor] analysed: " + analyzed);
-        String result = "OK " + query;
-        System.out.println("[QueryProcessor] result: " + result);
-        return result;
+        ExecutionPlan plan = planner.plan(analyzed);
+        System.out.println("[QueryProcessor] plan: " + plan);
+        if (plan instanceof UnresolvedPlan) {
+            String result = "OK " + query;
+            System.out.println("[QueryProcessor] result: " + result);
+            return result;
+        }
+        try {
+            QueryResult result = executorService().execute(plan);
+            String response = result.toResponse();
+            System.out.println("[QueryProcessor] result: " + response);
+            return response;
+        } catch (ExecutionException e) {
+            String error = e.toResponse();
+            System.out.println("[QueryProcessor] execute error: " + error);
+            return error;
+        }
+    }
+
+    private ExecutorService executorService() {
+        // Built after start(): CatalogManager is illegal until StorageEngine.start(),
+        // and Main constructs this processor before DatabaseServer.start().
+        if (executorService == null) {
+            ExecutorRegistry registry = new ExecutorRegistry();
+            registry.register(
+                    QueryType.CREATE_TABLE,
+                    new CommandExecutor(storageEngine.catalogManager())
+            );
+            executorService = new ExecutorService(registry);
+        }
+        return executorService;
     }
 }

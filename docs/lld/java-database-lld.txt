@@ -33,6 +33,8 @@ QueryProcessor
 DefaultQueryProcessor
 - lexer: QueryLexer
 - parser: QueryParser
+- planner: QueryPlanner
+- executorService: ExecutorService   // query orchestrator; not java.util.concurrent
 - storageEngine: StorageEngine
 + execute(query: String): String
 
@@ -67,6 +69,77 @@ UnresolvedQuery
 <<concrete>>
 AnalysisException
 + toResponse(): String
+
+
+<<enumeration>>
+QueryType
+CREATE_TABLE, UNRESOLVED
+
+
+<<interface>>
+ExecutionPlan
+<<sealed>> permits CreateTablePlan, UnresolvedPlan
++ queryType(): QueryType
+
+
+<<concrete>>
+CreateTablePlan
+- table: String
+- columns: List<ColumnMetadata>   // no ids yet; catalog assigns on execute
+
+
+<<concrete>>
+UnresolvedPlan
+- source: UnresolvedQuery
+
+
+<<interface>>
+QueryPlanner
++ plan(analyzed: AnalyzedQuery): ExecutionPlan
+
+
+<<concrete>>
+DefaultQueryPlanner
++ plan(analyzed: AnalyzedQuery): ExecutionPlan
+    // CREATE TABLE only; no CatalogManager / PhysicalStorage
+
+
+<<concrete>>
+QueryResult
+- message: String
++ ok(): QueryResult
++ toResponse(): String
+
+
+<<concrete>>
+ExecutionException
++ toResponse(): String
+
+
+<<interface>>
+QueryExecutor
++ execute(plan: ExecutionPlan): QueryResult
+
+
+<<concrete>>
+CommandExecutor
+- catalogManager: CatalogManager
++ execute(plan: ExecutionPlan): QueryResult
+    // CREATE_TABLE only; writes catalog; not Volcano
+
+
+<<concrete>>
+ExecutorRegistry
+- executors: Map<QueryType, QueryExecutor>
++ register(type: QueryType, executor: QueryExecutor)
++ get(type: QueryType): QueryExecutor
+
+
+<<concrete>>
+ExecutorService
+- registry: ExecutorRegistry
++ execute(plan: ExecutionPlan): QueryResult
+    // lookup + delegate; not java.util.concurrent.ExecutorService
 
 
 <<interface>>
@@ -441,6 +514,9 @@ DatabaseServer
       │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
       │                        ├── owns ▶ QueryParser (DefaultQueryParser)
       │                        ├── per query ▶ QueryAnalyser (DefaultQueryAnalyser + CatalogManager)
+      │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → CreateTablePlan)
+      │                        ├── ExecutorService → ExecutorRegistry
+      │                        │         └── CREATE_TABLE → CommandExecutor → CatalogManager (write)
       │                        │              ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
       │                        │              └── AstNode (Query / Expression)
       │                        └── uses ▶ StorageEngine (shared)
@@ -452,8 +528,8 @@ DatabaseServer
 Design note:
 DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProcessor (no lifecycle).
 NetworkModule owns RequestHandler.
-DefaultQueryProcessor owns QueryLexer and QueryParser; builds DefaultQueryAnalyser per query from StorageEngine.catalogManager() (requires start()). Uses StorageEngine (does not own its lifecycle).
-execute() lexes then parses then echoes.
+DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryPlanner; builds DefaultQueryAnalyser and ExecutorService on first catalog use from StorageEngine.catalogManager() (requires start()). Uses StorageEngine (does not own its lifecycle).
+execute() lexes, parses, analyses, plans, then runs CREATE TABLE through ExecutorService. Unresolved plans still echo OK <query>.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.processor.lexer (unchanged names).
 Parser types live under com.example.database.processor.parser.
