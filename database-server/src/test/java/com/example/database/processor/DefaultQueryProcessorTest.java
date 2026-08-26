@@ -1,6 +1,9 @@
 package com.example.database.processor;
 
 import com.example.database.storage.DataDirectory;
+import com.example.database.storage.catalog.ColumnMetadata;
+import com.example.database.storage.catalog.ColumnType;
+import com.example.database.storage.catalog.TableMetadata;
 import com.example.database.storage.DefaultStorageEngine;
 import com.example.database.storage.StorageEngine;
 import org.junit.jupiter.api.Test;
@@ -50,8 +53,8 @@ class DefaultQueryProcessorTest {
         DefaultQueryProcessor processor = newProcessor();
         assertEquals("OK CREATE DATABASE mydb", processor.execute("CREATE DATABASE mydb"));
         assertEquals(
-                "OK CREATE TABLE users (id, name)",
-                processor.execute("CREATE TABLE users (id, name)")
+                "OK CREATE TABLE users (id INT, name VARCHAR)",
+                processor.execute("CREATE TABLE users (id INT, name VARCHAR)")
         );
         assertEquals(
                 "OK CREATE INDEX idx ON users (id)",
@@ -68,8 +71,23 @@ class DefaultQueryProcessorTest {
         assertEquals("OK DELETE FROM t", processor.execute("DELETE FROM t"));
     }
 
+    @Test
+    void executeReturnsAnalysisErrorWhenCreateTableTargetAlreadyExists() {
+        DefaultQueryProcessor processor = newProcessor();
+        processor.storageEngine().catalogManager().createTable(TableMetadata.define(
+                "users",
+                java.util.List.of(ColumnMetadata.define("id", ColumnType.INT))
+        ));
+
+        assertEquals(
+                "ERROR: table already exists: users",
+                processor.execute("CREATE TABLE users (id INT, name VARCHAR)")
+        );
+    }
+
     private DefaultQueryProcessor newProcessor() {
         StorageEngine storage = new DefaultStorageEngine(new DataDirectory(dataDir));
+        storage.start();
         return new DefaultQueryProcessor(storage);
     }
 }

@@ -37,19 +37,39 @@ classDiagram
         <<concrete>>
         -QueryLexer lexer
         -QueryParser parser
-        -QueryAnalyser analyser
         -StorageEngine storageEngine
         +execute(String query) String
     }
 
     class QueryAnalyser {
         <<interface>>
-        +analyse(AstNode ast) boolean
+        +analyse(AstNode ast) AnalyzedQuery
     }
 
     class DefaultQueryAnalyser {
         <<concrete>>
-        +analyse(AstNode ast) boolean
+        -CatalogManager catalogManager
+        +analyse(AstNode ast) AnalyzedQuery
+    }
+
+    class AnalyzedQuery {
+        <<interface>>
+    }
+
+    class AnalyzedCreateTable {
+        <<concrete>>
+        -String table
+        -List~ColumnMetadata~ columns
+    }
+
+    class UnresolvedQuery {
+        <<concrete>>
+        -AstNode source
+    }
+
+    class AnalysisException {
+        <<concrete>>
+        +toResponse() String
     }
 
     class StorageEngine {
@@ -228,6 +248,9 @@ classDiagram
         UPDATE
         INSERT
         DELETE
+        INT
+        VARCHAR
+        BOOLEAN_TYPE
         IDENTIFIER
         STRING
         BOOLEAN
@@ -327,6 +350,25 @@ classDiagram
 
     class DeleteQuery {
         <<concrete>>
+    }
+
+    class ColumnSqlType {
+        <<enumeration>>
+        INT
+        VARCHAR
+        BOOLEAN
+    }
+
+    class ColumnDefinition {
+        <<concrete>>
+        -String name
+        -ColumnSqlType type
+    }
+
+    class CreateTableQuery {
+        <<concrete>>
+        -String table
+        -List~ColumnDefinition~ columns
     }
 
     class Expression {
@@ -448,9 +490,12 @@ classDiagram
     DefaultRequestHandler --> QueryProcessor : queryProcessor
     DefaultQueryProcessor --> QueryLexer : owns
     DefaultQueryProcessor --> QueryParser : owns
-    DefaultQueryProcessor --> QueryAnalyser : owns
     DefaultQueryProcessor --> StorageEngine : uses
+    DefaultQueryAnalyser --> CatalogManager : reads
     QueryAnalyser <|.. DefaultQueryAnalyser
+    AnalyzedQuery <|.. AnalyzedCreateTable
+    AnalyzedQuery <|.. UnresolvedQuery
+    AnalyzedCreateTable --> ColumnMetadata : columns
     StorageEngine --> TableStore : owns
     StorageEngine --> IndexStore : owns
     StorageEngine --> LockManager : owns
@@ -467,6 +512,9 @@ classDiagram
     Query <|.. UpdateQuery
     Query <|.. InsertQuery
     Query <|.. DeleteQuery
+    Query <|.. CreateTableQuery
+    CreateTableQuery --> ColumnDefinition : columns
+    ColumnDefinition --> ColumnSqlType : type
     AstNode <|-- Expression
     Expression <|.. ColumnExpression
     Expression <|.. LiteralExpression

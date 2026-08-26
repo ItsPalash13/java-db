@@ -24,6 +24,11 @@ public enum TokenCatalog {
     VALUES,
     WHERE,
 
+    // column types (CREATE TABLE)
+    INT,
+    VARCHAR,
+    BOOLEAN_TYPE,
+
     // literals / names
     IDENTIFIER,
     STRING,

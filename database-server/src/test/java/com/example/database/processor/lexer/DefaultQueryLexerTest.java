@@ -43,17 +43,30 @@ class DefaultQueryLexerTest {
     @Test
     void tokenizesCreateTable() {
         assertKinds(
-                "CREATE TABLE users (id, name)",
+                "CREATE TABLE users (id INT, name VARCHAR)",
                 TokenCatalog.CREATE,
                 TokenCatalog.TABLE,
                 TokenCatalog.IDENTIFIER,
                 TokenCatalog.LPAREN,
                 TokenCatalog.IDENTIFIER,
+                columnTypeKind("INT"),
                 TokenCatalog.COMMA,
                 TokenCatalog.IDENTIFIER,
+                columnTypeKind("VARCHAR"),
                 TokenCatalog.RPAREN,
                 TokenCatalog.EOF
         );
+    }
+
+    @Test
+    void tokenizesColumnTypeKeywordsSeparatelyFromBooleanLiterals() {
+        List<Token> ddlTokens = lexer.tokenize("CREATE TABLE t (active BOOLEAN)");
+        assertEquals(columnTypeKind("BOOLEAN"), ddlTokens.get(5).kind());
+        assertEquals("BOOLEAN", ddlTokens.get(5).lexeme());
+
+        List<Token> literalTokens = lexer.tokenize("SELECT * FROM t WHERE active = TRUE");
+        assertEquals(TokenCatalog.BOOLEAN, literalTokens.get(7).kind());
+        assertEquals("true", literalTokens.get(7).lexeme());
     }
 
     @Test
@@ -311,7 +324,7 @@ class DefaultQueryLexerTest {
     @ValueSource(strings = {
             "CREATE DATABASE app",
             "CREATE DB app",
-            "CREATE TABLE t (a, b)",
+            "CREATE TABLE t (a INT, b VARCHAR)",
             "CREATE INDEX i ON t (a)",
             "DROP TABLE t",
             "DROP DATABASE app",
@@ -335,5 +348,11 @@ class DefaultQueryLexerTest {
         List<Token> tokens = lexer.tokenize(query);
         List<TokenCatalog> actual = tokens.stream().map(Token::kind).toList();
         assertEquals(Arrays.asList(expected), actual, () -> "tokens=" + tokens);
+    }
+
+    private static TokenCatalog columnTypeKind(String sqlType) {
+        // BOOLEAN is the SQL keyword; BOOLEAN_TYPE is the lexer kind (TRUE/FALSE use BOOLEAN).
+        String enumName = "BOOLEAN".equalsIgnoreCase(sqlType) ? "BOOLEAN_TYPE" : sqlType.toUpperCase();
+        return TokenCatalog.valueOf(enumName);
     }
 }

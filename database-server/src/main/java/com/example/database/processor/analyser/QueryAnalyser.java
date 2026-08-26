@@ -3,13 +3,13 @@ package com.example.database.processor.analyser;
 import com.example.database.processor.parser.ast.AstNode;
 
 /**
- * Validates a parsed AST against catalog metadata (tables, columns, indexes).
- * Stub: always succeeds until {@code CatalogManager} is wired in.
+ * Validates a parsed AST against catalog metadata. Read-only for DDL in Phase 1 —
+ * {@link com.example.database.storage.catalog.CatalogManager#createTable} runs in the executor.
  */
 public interface QueryAnalyser {
 
     /**
-     * @return {@code true} if the AST is valid; {@code false} or an error response later on failure
+     * @throws AnalysisException when the statement is syntactically parsed but semantically invalid
      */
-    boolean analyse(AstNode ast);
+    AnalyzedQuery analyse(AstNode ast);
 }

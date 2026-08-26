@@ -33,19 +33,40 @@ QueryProcessor
 DefaultQueryProcessor
 - lexer: QueryLexer
 - parser: QueryParser
-- analyser: QueryAnalyser
 - storageEngine: StorageEngine
 + execute(query: String): String
 
 
 <<interface>>
 QueryAnalyser
-+ analyse(ast: AstNode): boolean
++ analyse(ast: AstNode): AnalyzedQuery   // throws AnalysisException
 
 
 <<concrete>>
 DefaultQueryAnalyser
-+ analyse(ast: AstNode): boolean
+- catalogManager: CatalogManager
++ analyse(ast: AstNode): AnalyzedQuery
+
+
+<<interface>>
+AnalyzedQuery
+<<sealed>> permits AnalyzedCreateTable, UnresolvedQuery
+
+
+<<concrete>>
+AnalyzedCreateTable
+- table: String
+- columns: List<ColumnMetadata>   // no ids yet; nullable defaults true
+
+
+<<concrete>>
+UnresolvedQuery
+- source: AstNode
+
+
+<<concrete>>
+AnalysisException
++ toResponse(): String
 
 
 <<interface>>
@@ -234,6 +255,7 @@ TokenCatalog
 CREATE, ALTER, DROP, DATABASE, TABLE, INDEX, COLUMN, ADD, ON,
 SELECT, UPDATE, DELETE, INSERT,
 INTO, FROM, SET, VALUES, WHERE,
+INT, VARCHAR, BOOLEAN_TYPE,
 IDENTIFIER, STRING, BOOLEAN, NUMBER,
 STAR, GT, LT, GTE, LTE, EQ, NEQ, SLASH, PLUS, MINUS,
 COMMA, LPAREN, RPAREN, SEMICOLON, EOF
@@ -298,6 +320,25 @@ Query extends AstNode
 
 <<concrete>>
 SelectQuery / UpdateQuery / InsertQuery / DeleteQuery
+/ CreateTableQuery / CreateDatabaseQuery / CreateIndexQuery
+/ AlterTableQuery / DropDatabaseQuery / DropTableQuery / DropIndexQuery
+
+
+<<enumeration>>
+ColumnSqlType
+INT, VARCHAR, BOOLEAN
+
+
+<<concrete>>
+ColumnDefinition
+- name: String
+- type: ColumnSqlType
+
+
+<<concrete>>
+CreateTableQuery
+- table: String
+- columns: List<ColumnDefinition>
 
 
 <<interface>>
@@ -399,7 +440,7 @@ DatabaseServer
       │              └── DefaultQueryProcessor coordinates
       │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
       │                        ├── owns ▶ QueryParser (DefaultQueryParser)
-      │                        ├── owns ▶ QueryAnalyser (DefaultQueryAnalyser; stub)
+      │                        ├── per query ▶ QueryAnalyser (DefaultQueryAnalyser + CatalogManager)
       │                        │              ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
       │                        │              └── AstNode (Query / Expression)
       │                        └── uses ▶ StorageEngine (shared)
@@ -411,7 +452,7 @@ DatabaseServer
 Design note:
 DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProcessor (no lifecycle).
 NetworkModule owns RequestHandler.
-DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryAnalyser; uses StorageEngine (does not own its lifecycle).
+DefaultQueryProcessor owns QueryLexer and QueryParser; builds DefaultQueryAnalyser per query from StorageEngine.catalogManager() (requires start()). Uses StorageEngine (does not own its lifecycle).
 execute() lexes then parses then echoes.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.processor.lexer (unchanged names).

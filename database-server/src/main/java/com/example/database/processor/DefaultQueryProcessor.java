@@ -1,5 +1,7 @@
 package com.example.database.processor;
 
+import com.example.database.processor.analyser.AnalysisException;
+import com.example.database.processor.analyser.AnalyzedQuery;
 import com.example.database.processor.analyser.DefaultQueryAnalyser;
 import com.example.database.processor.analyser.QueryAnalyser;
 import com.example.database.processor.lexer.DefaultQueryLexer;
@@ -20,15 +22,14 @@ import java.util.Objects;
 
 /**
  * Default query processor stub: lexes, parses, analyses, then echoes {@code OK <query>}.
- * Owns and coordinates {@link QueryLexer}, {@link QueryParser}, and {@link QueryAnalyser}.
- * Uses {@link StorageEngine} (shared; lifecycle owned by {@code DatabaseServer}).
+ * Owns {@link QueryLexer} and {@link QueryParser}; builds {@link QueryAnalyser} per query
+ * from {@link StorageEngine#catalogManager()} (storage must be started before {@code execute}).
  * Lex and parse errors are returned as a response with the exact index.
  */
 public final class DefaultQueryProcessor implements QueryProcessor {
 
     private final QueryLexer lexer;
     private final QueryParser parser;
-    private final QueryAnalyser analyser;
     private final StorageEngine storageEngine;
 
     public DefaultQueryProcessor() {
@@ -42,7 +43,6 @@ public final class DefaultQueryProcessor implements QueryProcessor {
     public DefaultQueryProcessor(StorageEngine storageEngine) {
         this.lexer = new DefaultQueryLexer();
         this.parser = new DefaultQueryParser();
-        this.analyser = new DefaultQueryAnalyser();
         this.storageEngine = Objects.requireNonNull(storageEngine, "storageEngine");
     }
 
@@ -71,12 +71,21 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             return error;
         }
         System.out.println("[QueryProcessor] ast: " + ast);
-        if (!analyser.analyse(ast)) {
-            String error = "ERROR: analysis failed";
+        final AnalyzedQuery analyzed;
+        try {
+            QueryAnalyser analyser = new DefaultQueryAnalyser(storageEngine.catalogManager());
+            analyzed = analyser.analyse(ast);
+        } catch (AnalysisException e) {
+            String error = e.toResponse();
+            System.out.println("[QueryProcessor] analyse error: " + error);
+            return error;
+        } catch (IllegalStateException e) {
+            // catalogManager() when StorageEngine.start() has not run yet.
+            String error = "ERROR: " + e.getMessage();
             System.out.println("[QueryProcessor] analyse error: " + error);
             return error;
         }
-        System.out.println("[QueryProcessor] analyse: ok");
+        System.out.println("[QueryProcessor] analysed: " + analyzed);
         String result = "OK " + query;
         System.out.println("[QueryProcessor] result: " + result);
         return result;

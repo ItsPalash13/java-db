@@ -4,6 +4,8 @@ import com.example.database.processor.lexer.DefaultQueryLexer;
 import com.example.database.processor.lexer.QueryLexer;
 import com.example.database.processor.lexer.Token;
 import com.example.database.processor.parser.ast.AstNode;
+import com.example.database.processor.parser.ast.ColumnDefinition;
+import com.example.database.processor.parser.ast.ColumnSqlType;
 import com.example.database.processor.parser.ast.expr.BinaryExpression;
 import com.example.database.processor.parser.ast.expr.ColumnExpression;
 import com.example.database.processor.parser.ast.expr.LiteralExpression;
@@ -112,9 +114,40 @@ class DefaultQueryParserTest {
 
     @Test
     void parsesCreateTable() {
-        CreateTableQuery query = parseAs("CREATE TABLE users (id, name)", CreateTableQuery.class);
+        CreateTableQuery query = parseAs(
+                "CREATE TABLE users (id INT, name VARCHAR)",
+                CreateTableQuery.class
+        );
         assertEquals("users", query.table());
-        assertEquals(List.of("id", "name"), query.columns());
+        assertEquals(
+                List.of(
+                        new ColumnDefinition("id", ColumnSqlType.INT),
+                        new ColumnDefinition("name", ColumnSqlType.VARCHAR)
+                ),
+                query.columns()
+        );
+    }
+
+    @Test
+    void parsesCreateTableWithIntegerAndBooleanTypes() {
+        CreateTableQuery query = parseAs(
+                "CREATE TABLE flags (count INTEGER, active BOOLEAN)",
+                CreateTableQuery.class
+        );
+        assertEquals(
+                List.of(
+                        new ColumnDefinition("count", ColumnSqlType.INT),
+                        new ColumnDefinition("active", ColumnSqlType.BOOLEAN)
+                ),
+                query.columns()
+        );
+    }
+
+    @Test
+    void rejectsCreateTableWithoutColumnTypes() {
+        List<Token> tokens = lexer.tokenize("CREATE TABLE users (id, name)");
+        ParseException ex = assertThrows(ParseException.class, () -> parser.parse(tokens));
+        assertTrue(ex.toResponse().contains("expected column type"));
     }
 
     @Test

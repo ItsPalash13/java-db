@@ -30,6 +30,11 @@ public final class DefaultQueryLexer implements QueryLexer {
             Map.entry("SET", TokenCatalog.SET),
             Map.entry("VALUES", TokenCatalog.VALUES),
             Map.entry("WHERE", TokenCatalog.WHERE),
+            Map.entry("INT", TokenCatalog.INT),
+            Map.entry("INTEGER", TokenCatalog.INT),
+            Map.entry("VARCHAR", TokenCatalog.VARCHAR),
+            // BOOLEAN type keyword is separate from TRUE/FALSE literal tokens below.
+            Map.entry("BOOLEAN", TokenCatalog.BOOLEAN_TYPE),
             Map.entry("TRUE", TokenCatalog.BOOLEAN),
             Map.entry("FALSE", TokenCatalog.BOOLEAN)
     );
