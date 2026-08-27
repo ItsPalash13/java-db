@@ -5,14 +5,14 @@ import com.example.database.processor.planner.ExecutionPlan;
 import java.util.Objects;
 
 /**
- * Orchestrates execution: look up {@link QueryExecutor} and call it.
- * Not {@link java.util.concurrent.ExecutorService} — no thread pool, no scheduling.
+ * Looks up a {@link QueryExecutor} and runs the plan on the caller thread.
+ * Not a thread pool: network workers already own the request from receive through execute.
  */
-public final class ExecutorService {
+public final class QueryDispatcher {
 
     private final ExecutorRegistry registry;
 
-    public ExecutorService(ExecutorRegistry registry) {
+    public QueryDispatcher(ExecutorRegistry registry) {
         this.registry = Objects.requireNonNull(registry, "registry");
     }
 

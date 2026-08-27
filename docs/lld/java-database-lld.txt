@@ -34,7 +34,7 @@ DefaultQueryProcessor
 - lexer: QueryLexer
 - parser: QueryParser
 - planner: QueryPlanner
-- executorService: ExecutorService   // query orchestrator; not java.util.concurrent
+- queryDispatcher: QueryDispatcher   // lookup + delegate on caller thread; not a thread pool
 - storageEngine: StorageEngine
 + execute(query: String): String
 
@@ -170,10 +170,10 @@ ExecutorRegistry
 
 
 <<concrete>>
-ExecutorService
+QueryDispatcher
 - registry: ExecutorRegistry
 + execute(plan: ExecutionPlan): QueryResult
-    // lookup + delegate; not java.util.concurrent.ExecutorService
+    // lookup + delegate on caller thread; not a thread pool
 
 
 <<interface>>
@@ -575,7 +575,7 @@ DatabaseServer
       │                        ├── owns ▶ QueryParser (DefaultQueryParser)
       │                        ├── per query ▶ QueryAnalyser (DefaultQueryAnalyser + CatalogManager)
       │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → CreateTablePlan / DropTablePlan / CreateDatabasePlan / DropDatabasePlan)
-      │                        ├── ExecutorService → ExecutorRegistry
+      │                        ├── QueryDispatcher → ExecutorRegistry
       │                        │         └── CREATE_TABLE / DROP_TABLE / CREATE_DATABASE / DROP_DATABASE → CommandExecutor → CatalogManager (write)
       │                        │              ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
       │                        │              └── AstNode (Query / Expression)
@@ -588,8 +588,8 @@ DatabaseServer
 Design note:
 DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProcessor (no lifecycle).
 NetworkModule owns RequestHandler.
-DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryPlanner; builds DefaultQueryAnalyser and ExecutorService on first catalog use from StorageEngine.catalogManager() (requires start()). Uses StorageEngine (does not own its lifecycle).
-execute() lexes, parses, analyses, plans, then runs CREATE/DROP TABLE and CREATE/DROP DATABASE through ExecutorService. Table names are database.table. Unresolved plans still echo OK <query>.
+DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryPlanner; builds DefaultQueryAnalyser and QueryDispatcher on first catalog use from StorageEngine.catalogManager() (requires start()). Uses StorageEngine (does not own its lifecycle).
+execute() lexes, parses, analyses, plans, then runs CREATE/DROP TABLE and CREATE/DROP DATABASE through QueryDispatcher. Table names are database.table. Unresolved plans still echo OK <query>.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.processor.lexer (unchanged names).
 Parser types live under com.example.database.processor.parser.

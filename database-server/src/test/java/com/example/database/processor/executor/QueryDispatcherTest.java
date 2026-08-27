@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class ExecutorServiceTest {
+class QueryDispatcherTest {
 
     @Test
     void dispatchesCreateTableToCommandExecutor() {
@@ -25,9 +25,9 @@ class ExecutorServiceTest {
         catalog.createDatabase("shop");
         ExecutorRegistry registry = new ExecutorRegistry();
         registry.register(QueryType.CREATE_TABLE, new CommandExecutor(catalog));
-        ExecutorService executorService = new ExecutorService(registry);
+        QueryDispatcher dispatcher = new QueryDispatcher(registry);
 
-        QueryResult result = executorService.execute(new CreateTablePlan(
+        QueryResult result = dispatcher.execute(new CreateTablePlan(
                 "shop",
                 "users",
                 List.of(ColumnMetadata.define("id", ColumnType.INT))
@@ -39,14 +39,14 @@ class ExecutorServiceTest {
 
     @Test
     void missingExecutorIsAnExecutionError() {
-        ExecutorService executorService = new ExecutorService(new ExecutorRegistry());
+        QueryDispatcher dispatcher = new QueryDispatcher(new ExecutorRegistry());
         UnresolvedPlan plan = new UnresolvedPlan(
                 new UnresolvedQuery(new SelectQuery(true, List.of(), new QualifiedTable("shop", "t"), null))
         );
 
         ExecutionException ex = assertThrows(
                 ExecutionException.class,
-                () -> executorService.execute(plan)
+                () -> dispatcher.execute(plan)
         );
         assertEquals("no executor registered for UNRESOLVED", ex.getMessage());
     }

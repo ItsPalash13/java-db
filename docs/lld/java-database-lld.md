@@ -38,7 +38,7 @@ classDiagram
         -QueryLexer lexer
         -QueryParser parser
         -QueryPlanner planner
-        -ExecutorService executorService
+        -QueryDispatcher queryDispatcher
         -StorageEngine storageEngine
         +execute(String query) String
     }
@@ -172,7 +172,7 @@ classDiagram
         +get(QueryType type) QueryExecutor
     }
 
-    class ExecutorService {
+    class QueryDispatcher {
         <<concrete>>
         -ExecutorRegistry registry
         +execute(ExecutionPlan plan) QueryResult
@@ -629,7 +629,7 @@ classDiagram
     DefaultQueryProcessor --> QueryLexer : owns
     DefaultQueryProcessor --> QueryParser : owns
     DefaultQueryProcessor --> QueryPlanner : owns
-    DefaultQueryProcessor --> ExecutorService : owns
+    DefaultQueryProcessor --> QueryDispatcher : owns
     DefaultQueryProcessor --> StorageEngine : uses
     DefaultQueryAnalyser --> CatalogManager : reads
     QueryAnalyser <|.. DefaultQueryAnalyser
@@ -655,7 +655,7 @@ classDiagram
     DefaultQueryPlanner ..> AnalyzedCreateDatabase
     DefaultQueryPlanner ..> AnalyzedDropTable
     DefaultQueryPlanner ..> AnalyzedDropDatabase
-    ExecutorService --> ExecutorRegistry
+    QueryDispatcher --> ExecutorRegistry
     ExecutorRegistry --> QueryExecutor
     QueryExecutor <|.. CommandExecutor
     CommandExecutor --> CatalogManager : writes

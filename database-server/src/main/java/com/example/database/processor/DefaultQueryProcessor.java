@@ -7,7 +7,7 @@ import com.example.database.processor.analyser.QueryAnalyser;
 import com.example.database.processor.executor.CommandExecutor;
 import com.example.database.processor.executor.ExecutionException;
 import com.example.database.processor.executor.ExecutorRegistry;
-import com.example.database.processor.executor.ExecutorService;
+import com.example.database.processor.executor.QueryDispatcher;
 import com.example.database.processor.executor.QueryResult;
 import com.example.database.processor.lexer.DefaultQueryLexer;
 import com.example.database.processor.lexer.LexException;
@@ -40,7 +40,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
     private final QueryParser parser;
     private final QueryPlanner planner;
     private final StorageEngine storageEngine;
-    private ExecutorService executorService;
+    private QueryDispatcher queryDispatcher;
 
     public DefaultQueryProcessor() {
         this(new DefaultStorageEngine(DataDirectory.defaults()));
@@ -105,7 +105,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             return result;
         }
         try {
-            QueryResult result = executorService().execute(plan);
+            QueryResult result = queryDispatcher().execute(plan);
             String response = result.toResponse();
             System.out.println("[QueryProcessor] result: " + response);
             return response;
@@ -116,18 +116,18 @@ public final class DefaultQueryProcessor implements QueryProcessor {
         }
     }
 
-    private ExecutorService executorService() {
+    private QueryDispatcher queryDispatcher() {
         // Built after start(): CatalogManager is illegal until StorageEngine.start(),
         // and Main constructs this processor before DatabaseServer.start().
-        if (executorService == null) {
+        if (queryDispatcher == null) {
             ExecutorRegistry registry = new ExecutorRegistry();
             CommandExecutor commands = new CommandExecutor(storageEngine.catalogManager());
             registry.register(QueryType.CREATE_TABLE, commands);
             registry.register(QueryType.DROP_TABLE, commands);
             registry.register(QueryType.CREATE_DATABASE, commands);
             registry.register(QueryType.DROP_DATABASE, commands);
-            executorService = new ExecutorService(registry);
+            queryDispatcher = new QueryDispatcher(registry);
         }
-        return executorService;
+        return queryDispatcher;
     }
 }
