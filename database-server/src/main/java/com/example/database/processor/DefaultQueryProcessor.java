@@ -31,8 +31,9 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Lex → parse → analyse → plan → execute. CREATE/DROP TABLE and CREATE/DROP DATABASE
- * write the catalog; other statements still echo {@code OK <query>} until their own executor branches.
+ * Lex → parse → analyse → plan → execute. CREATE/DROP TABLE, CREATE/DROP DATABASE,
+ * ALTER TABLE ADD/DROP COLUMN, and CREATE/DROP INDEX write the catalog; other statements still echo
+ * {@code OK <query>} until their own executor branches.
  */
 public final class DefaultQueryProcessor implements QueryProcessor {
 
@@ -126,6 +127,10 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             registry.register(QueryType.DROP_TABLE, commands);
             registry.register(QueryType.CREATE_DATABASE, commands);
             registry.register(QueryType.DROP_DATABASE, commands);
+            registry.register(QueryType.ADD_COLUMN, commands);
+            registry.register(QueryType.DROP_COLUMN, commands);
+            registry.register(QueryType.CREATE_INDEX, commands);
+            registry.register(QueryType.DROP_INDEX, commands);
             queryDispatcher = new QueryDispatcher(registry);
         }
         return queryDispatcher;

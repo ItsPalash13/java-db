@@ -1,12 +1,17 @@
 package com.example.database.processor.executor;
 
+import com.example.database.processor.planner.AddColumnPlan;
 import com.example.database.processor.planner.CreateDatabasePlan;
+import com.example.database.processor.planner.CreateIndexPlan;
 import com.example.database.processor.planner.CreateTablePlan;
+import com.example.database.processor.planner.DropColumnPlan;
 import com.example.database.processor.planner.DropDatabasePlan;
+import com.example.database.processor.planner.DropIndexPlan;
 import com.example.database.processor.planner.DropTablePlan;
 import com.example.database.processor.planner.ExecutionPlan;
 import com.example.database.storage.catalog.CatalogException;
 import com.example.database.storage.catalog.CatalogManager;
+import com.example.database.storage.catalog.IndexMetadata;
 import com.example.database.storage.catalog.TableMetadata;
 
 import java.util.Objects;
@@ -48,6 +53,34 @@ public final class CommandExecutor implements QueryExecutor {
             }
             if (plan instanceof DropDatabasePlan dropDatabase) {
                 catalogManager.dropDatabase(dropDatabase.database());
+                return QueryResult.ok();
+            }
+            if (plan instanceof AddColumnPlan addColumn) {
+                catalogManager.addColumn(
+                        addColumn.database(),
+                        addColumn.table(),
+                        addColumn.column()
+                );
+                return QueryResult.ok();
+            }
+            if (plan instanceof DropColumnPlan dropColumn) {
+                catalogManager.dropColumn(
+                        dropColumn.database(),
+                        dropColumn.table(),
+                        dropColumn.column()
+                );
+                return QueryResult.ok();
+            }
+            if (plan instanceof CreateIndexPlan createIndex) {
+                catalogManager.createIndex(
+                        createIndex.database(),
+                        createIndex.table(),
+                        IndexMetadata.define(createIndex.index(), createIndex.columnIds())
+                );
+                return QueryResult.ok();
+            }
+            if (plan instanceof DropIndexPlan dropIndex) {
+                catalogManager.dropIndex(dropIndex.index());
                 return QueryResult.ok();
             }
         } catch (CatalogException e) {

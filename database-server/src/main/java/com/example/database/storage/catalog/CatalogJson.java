@@ -46,6 +46,25 @@ final class CatalogJson {
             appendString(json, column.type().name());
             json.append(",\"nullable\":").append(column.nullable()).append('}');
         }
+        json.append("],\"indexes\":[");
+        List<IndexMetadata> indexes = table.indexes();
+        for (int i = 0; i < indexes.size(); i++) {
+            if (i > 0) {
+                json.append(',');
+            }
+            IndexMetadata index = indexes.get(i);
+            json.append("{\"name\":");
+            appendString(json, index.name());
+            json.append(",\"columnIds\":[");
+            List<Integer> columnIds = index.columnIds();
+            for (int c = 0; c < columnIds.size(); c++) {
+                if (c > 0) {
+                    json.append(',');
+                }
+                json.append(columnIds.get(c));
+            }
+            json.append("],\"unique\":").append(index.unique()).append('}');
+        }
         json.append("]}");
     }
 
@@ -96,7 +115,38 @@ final class CatalogJson {
             for (Object column : columnList) {
                 columns.add(columnFrom(column));
             }
-            return new TableMetadata(tableId, database, name, columns);
+            List<IndexMetadata> indexes = List.of();
+            Object indexesValue = map.get("indexes");
+            if (indexesValue != null) {
+                if (!(indexesValue instanceof List<?> indexList)) {
+                    throw new CatalogException("table " + name + " indexes must be an array");
+                }
+                indexes = new ArrayList<>(indexList.size());
+                for (Object index : indexList) {
+                    indexes.add(indexFrom(index));
+                }
+                indexes = List.copyOf(indexes);
+            }
+            return new TableMetadata(tableId, database, name, columns, indexes);
+        }
+
+        private IndexMetadata indexFrom(Object item) {
+            Map<String, Object> map = object(item, "index");
+            String indexName = stringField(map, "name");
+            Object columnIdsValue = map.get("columnIds");
+            if (!(columnIdsValue instanceof List<?> columnIdList) || columnIdList.isEmpty()) {
+                throw new CatalogException("index " + indexName + " missing columnIds array");
+            }
+            List<Integer> columnIds = new ArrayList<>(columnIdList.size());
+            for (Object columnId : columnIdList) {
+                if (!(columnId instanceof Long number) || number != number.intValue() || number < 1) {
+                    throw new CatalogException("index " + indexName + " has invalid columnId");
+                }
+                columnIds.add(number.intValue());
+            }
+            Object uniqueValue = map.get("unique");
+            boolean unique = uniqueValue instanceof Boolean b && b;
+            return new IndexMetadata(indexName, columnIds, unique);
         }
 
         private ColumnMetadata columnFrom(Object item) {

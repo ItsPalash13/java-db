@@ -1,8 +1,12 @@
 package com.example.database.processor.planner;
 
+import com.example.database.processor.analyser.AnalyzedAddColumn;
 import com.example.database.processor.analyser.AnalyzedCreateDatabase;
+import com.example.database.processor.analyser.AnalyzedCreateIndex;
 import com.example.database.processor.analyser.AnalyzedCreateTable;
+import com.example.database.processor.analyser.AnalyzedDropColumn;
 import com.example.database.processor.analyser.AnalyzedDropDatabase;
+import com.example.database.processor.analyser.AnalyzedDropIndex;
 import com.example.database.processor.analyser.AnalyzedDropTable;
 import com.example.database.processor.analyser.UnresolvedQuery;
 import com.example.database.processor.parser.ast.QualifiedTable;
@@ -64,6 +68,47 @@ class DefaultQueryPlannerTest {
         );
         assertEquals(QueryType.DROP_DATABASE, drop.queryType());
         assertEquals("shop", drop.database());
+    }
+
+    @Test
+    void plansAddColumn() {
+        ColumnMetadata age = ColumnMetadata.define("age", ColumnType.INT);
+        AddColumnPlan plan = assertInstanceOf(
+                AddColumnPlan.class,
+                planner.plan(new AnalyzedAddColumn("shop", "users", age))
+        );
+        assertEquals(QueryType.ADD_COLUMN, plan.queryType());
+        assertEquals("shop", plan.database());
+        assertEquals("users", plan.table());
+        assertEquals(age, plan.column());
+    }
+
+    @Test
+    void plansDropColumn() {
+        DropColumnPlan plan = assertInstanceOf(
+                DropColumnPlan.class,
+                planner.plan(new AnalyzedDropColumn("shop", "users", "name"))
+        );
+        assertEquals(QueryType.DROP_COLUMN, plan.queryType());
+        assertEquals("shop", plan.database());
+        assertEquals("users", plan.table());
+        assertEquals("name", plan.column());
+    }
+
+    @Test
+    void plansCreateAndDropIndex() {
+        CreateIndexPlan create = assertInstanceOf(
+                CreateIndexPlan.class,
+                planner.plan(new AnalyzedCreateIndex("shop", "users", "idx_users_id", List.of(1)))
+        );
+        assertEquals(QueryType.CREATE_INDEX, create.queryType());
+        assertEquals(List.of(1), create.columnIds());
+
+        DropIndexPlan drop = assertInstanceOf(
+                DropIndexPlan.class,
+                planner.plan(new AnalyzedDropIndex("shop", "users", "idx_users_id"))
+        );
+        assertEquals(QueryType.DROP_INDEX, drop.queryType());
     }
 
     @Test

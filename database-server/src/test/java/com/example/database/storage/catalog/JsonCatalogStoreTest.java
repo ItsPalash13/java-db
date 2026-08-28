@@ -84,6 +84,41 @@ class JsonCatalogStoreTest {
     }
 
     @Test
+    void saveTableRoundTripsIndexDefinitions() {
+        store.createDatabase("shop");
+        TableMetadata users = new TableMetadata(
+                1,
+                "shop",
+                "users",
+                List.of(new ColumnMetadata(1, "id", ColumnType.INT, true)),
+                List.of(IndexMetadata.define("idx_users_id", List.of(1)))
+        );
+
+        store.saveTable(users);
+
+        List<TableMetadata> loaded = store.load();
+        assertEquals(1, loaded.size());
+        assertEquals(users, loaded.get(0));
+    }
+
+    @Test
+    void loadTreatsMissingIndexesAsEmpty() {
+        store.createDatabase("shop");
+        Path catalog = storeRoot.resolve("shop").resolve("users").resolve("catalog.json");
+        try {
+            Files.createDirectories(catalog.getParent());
+            Files.writeString(catalog, """
+                    {"tableId":1,"name":"users","columns":[{"columnId":1,"name":"id","type":"INT","nullable":true}]}
+                    """);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        TableMetadata loaded = store.load().get(0);
+        assertTrue(loaded.indexes().isEmpty());
+    }
+
+    @Test
     void dropTableRemovesCatalogFileAndDirectory() {
         store.createDatabase("shop");
         store.saveTable(new TableMetadata(

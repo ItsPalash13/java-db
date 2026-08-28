@@ -2,6 +2,7 @@ package com.example.database.processor.parser.statement;
 
 import com.example.database.processor.lexer.Token;
 import com.example.database.processor.lexer.TokenCatalog;
+import com.example.database.processor.parser.ColumnTypeParser;
 import com.example.database.processor.parser.QualifiedNames;
 import com.example.database.processor.parser.ParseException;
 import com.example.database.processor.parser.Parser;
@@ -69,26 +70,8 @@ public final class CreateParser implements Parser {
 
     private static ColumnDefinition parseColumnDefinition(TokenStream stream) {
         String name = stream.expect(TokenCatalog.IDENTIFIER).lexeme();
-        ColumnSqlType type = parseColumnType(stream);
+        ColumnSqlType type = ColumnTypeParser.parse(stream);
         return new ColumnDefinition(name, type);
-    }
-
-    private static ColumnSqlType parseColumnType(TokenStream stream) {
-        Token token = stream.peek();
-        ColumnSqlType type = switch (token.kind()) {
-            case INT -> ColumnSqlType.INT;
-            case VARCHAR -> ColumnSqlType.VARCHAR;
-            case BOOLEAN_TYPE -> ColumnSqlType.BOOLEAN;
-            default -> null;
-        };
-        if (type == null) {
-            throw new ParseException(
-                    token.index(),
-                    "expected column type INT, VARCHAR, or BOOLEAN but found " + token.kind()
-            );
-        }
-        stream.consume();
-        return type;
     }
 
     private static List<String> parseIndexColumnList(TokenStream stream) {

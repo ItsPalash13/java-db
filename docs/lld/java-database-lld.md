@@ -81,6 +81,35 @@ classDiagram
         -String database
     }
 
+    class AnalyzedAddColumn {
+        <<concrete>>
+        -String database
+        -String table
+        -ColumnMetadata column
+    }
+
+    class AnalyzedDropColumn {
+        <<concrete>>
+        -String database
+        -String table
+        -String column
+    }
+
+    class AnalyzedCreateIndex {
+        <<concrete>>
+        -String database
+        -String table
+        -String index
+        -List~Integer~ columnIds
+    }
+
+    class AnalyzedDropIndex {
+        <<concrete>>
+        -String database
+        -String table
+        -String index
+    }
+
     class UnresolvedQuery {
         <<concrete>>
         -AstNode source
@@ -97,6 +126,10 @@ classDiagram
         DROP_TABLE
         CREATE_DATABASE
         DROP_DATABASE
+        ADD_COLUMN
+        DROP_COLUMN
+        CREATE_INDEX
+        DROP_INDEX
         UNRESOLVED
     }
 
@@ -126,6 +159,35 @@ classDiagram
     class DropDatabasePlan {
         <<concrete>>
         -String database
+    }
+
+    class AddColumnPlan {
+        <<concrete>>
+        -String database
+        -String table
+        -ColumnMetadata column
+    }
+
+    class DropColumnPlan {
+        <<concrete>>
+        -String database
+        -String table
+        -String column
+    }
+
+    class CreateIndexPlan {
+        <<concrete>>
+        -String database
+        -String table
+        -String index
+        -List~Integer~ columnIds
+    }
+
+    class DropIndexPlan {
+        <<concrete>>
+        -String database
+        -String table
+        -String index
     }
 
     class UnresolvedPlan {
@@ -249,6 +311,10 @@ classDiagram
         +tableExists(String database, String table) boolean
         +createTable(TableMetadata table) TableMetadata
         +dropTable(String database, String table)
+        +addColumn(String database, String table, ColumnMetadata column) TableMetadata
+        +dropColumn(String database, String table, String column) TableMetadata
+        +createIndex(String database, String table, IndexMetadata index) TableMetadata
+        +dropIndex(String index)
         +allTables() List~TableMetadata~
         +databaseExists(String name) boolean
         +allDatabases() List~String~
@@ -267,6 +333,10 @@ classDiagram
         +tableExists(String database, String table) boolean
         +createTable(TableMetadata table) TableMetadata
         +dropTable(String database, String table)
+        +addColumn(String database, String table, ColumnMetadata column) TableMetadata
+        +dropColumn(String database, String table, String column) TableMetadata
+        +createIndex(String database, String table, IndexMetadata index) TableMetadata
+        +dropIndex(String index)
         +allTables() List~TableMetadata~
         +databaseExists(String name) boolean
         +allDatabases() List~String~
@@ -281,7 +351,16 @@ classDiagram
         -String database
         -String name
         -List~ColumnMetadata~ columns
+        -List~IndexMetadata~ indexes
         +define(String database, String name, List~ColumnMetadata~ columns) TableMetadata
+    }
+
+    class IndexMetadata {
+        <<concrete>>
+        -String name
+        -List~Integer~ columnIds
+        -boolean unique
+        +define(String name, List~Integer~ columnIds) IndexMetadata
     }
 
     class ColumnMetadata {
@@ -607,6 +686,7 @@ classDiagram
     CatalogManager <|.. DefaultCatalogManager
     DefaultCatalogManager --> TableMetadata : stores
     TableMetadata --> ColumnMetadata : columns
+    TableMetadata --> IndexMetadata : indexes
     ColumnMetadata --> ColumnType : type
     CatalogManager ..> CatalogException : throws
     CatalogManager --> CatalogStore : owns
@@ -637,24 +717,42 @@ classDiagram
     AnalyzedQuery <|.. AnalyzedCreateDatabase
     AnalyzedQuery <|.. AnalyzedDropTable
     AnalyzedQuery <|.. AnalyzedDropDatabase
+    AnalyzedQuery <|.. AnalyzedAddColumn
+    AnalyzedQuery <|.. AnalyzedDropColumn
+    AnalyzedQuery <|.. AnalyzedCreateIndex
+    AnalyzedQuery <|.. AnalyzedDropIndex
     AnalyzedQuery <|.. UnresolvedQuery
     AnalyzedCreateTable --> ColumnMetadata : columns
+    AnalyzedAddColumn --> ColumnMetadata : column
     QueryPlanner <|.. DefaultQueryPlanner
     ExecutionPlan <|.. CreateTablePlan
     ExecutionPlan <|.. CreateDatabasePlan
     ExecutionPlan <|.. DropTablePlan
     ExecutionPlan <|.. DropDatabasePlan
+    ExecutionPlan <|.. AddColumnPlan
+    ExecutionPlan <|.. DropColumnPlan
+    ExecutionPlan <|.. CreateIndexPlan
+    ExecutionPlan <|.. DropIndexPlan
     ExecutionPlan <|.. UnresolvedPlan
     CreateTablePlan --> ColumnMetadata : columns
     CreateTablePlan --> QueryType
     CreateDatabasePlan --> QueryType
     DropTablePlan --> QueryType
     DropDatabasePlan --> QueryType
+    AddColumnPlan --> QueryType
+    DropColumnPlan --> QueryType
+    CreateIndexPlan --> QueryType
+    DropIndexPlan --> QueryType
+    AddColumnPlan --> ColumnMetadata : column
     UnresolvedPlan --> UnresolvedQuery : source
     DefaultQueryPlanner ..> AnalyzedCreateTable
     DefaultQueryPlanner ..> AnalyzedCreateDatabase
     DefaultQueryPlanner ..> AnalyzedDropTable
     DefaultQueryPlanner ..> AnalyzedDropDatabase
+    DefaultQueryPlanner ..> AnalyzedAddColumn
+    DefaultQueryPlanner ..> AnalyzedDropColumn
+    DefaultQueryPlanner ..> AnalyzedCreateIndex
+    DefaultQueryPlanner ..> AnalyzedDropIndex
     QueryDispatcher --> ExecutorRegistry
     ExecutorRegistry --> QueryExecutor
     QueryExecutor <|.. CommandExecutor
@@ -663,6 +761,10 @@ classDiagram
     CommandExecutor ..> CreateDatabasePlan
     CommandExecutor ..> DropTablePlan
     CommandExecutor ..> DropDatabasePlan
+    CommandExecutor ..> AddColumnPlan
+    CommandExecutor ..> DropColumnPlan
+    CommandExecutor ..> CreateIndexPlan
+    CommandExecutor ..> DropIndexPlan
     StorageEngine --> TableStore : owns
     StorageEngine --> IndexStore : owns
     StorageEngine --> LockManager : owns

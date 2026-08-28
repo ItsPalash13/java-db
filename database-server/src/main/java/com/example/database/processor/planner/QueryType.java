@@ -9,5 +9,9 @@ public enum QueryType {
     DROP_TABLE,
     CREATE_DATABASE,
     DROP_DATABASE,
+    ADD_COLUMN,
+    DROP_COLUMN,
+    CREATE_INDEX,
+    DROP_INDEX,
     UNRESOLVED
 }

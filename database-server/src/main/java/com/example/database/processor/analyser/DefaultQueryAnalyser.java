@@ -4,13 +4,17 @@ import com.example.database.processor.parser.ast.AstNode;
 import com.example.database.processor.parser.ast.ColumnDefinition;
 import com.example.database.processor.parser.ast.ColumnSqlType;
 import com.example.database.processor.parser.ast.QualifiedTable;
+import com.example.database.processor.parser.ast.query.AlterTableQuery;
 import com.example.database.processor.parser.ast.query.CreateDatabaseQuery;
+import com.example.database.processor.parser.ast.query.CreateIndexQuery;
 import com.example.database.processor.parser.ast.query.CreateTableQuery;
 import com.example.database.processor.parser.ast.query.DropDatabaseQuery;
+import com.example.database.processor.parser.ast.query.DropIndexQuery;
 import com.example.database.processor.parser.ast.query.DropTableQuery;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.ColumnType;
+import com.example.database.storage.catalog.IndexMetadata;
 import com.example.database.storage.catalog.TableMetadata;
 
 import java.util.ArrayList;
@@ -20,7 +24,8 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Semantic checks for CREATE/DROP TABLE and CREATE/DROP DATABASE. Reads catalog; never mutates it.
+ * Semantic checks for CREATE/DROP TABLE, CREATE/DROP DATABASE, ALTER TABLE ADD/DROP COLUMN,
+ * and CREATE/DROP INDEX. Reads catalog; never mutates it.
  */
 public final class DefaultQueryAnalyser implements QueryAnalyser {
 
@@ -44,6 +49,15 @@ public final class DefaultQueryAnalyser implements QueryAnalyser {
         }
         if (ast instanceof DropDatabaseQuery dropDatabase) {
             return analyseDropDatabase(dropDatabase);
+        }
+        if (ast instanceof AlterTableQuery alterTable) {
+            return analyseAlterTable(alterTable);
+        }
+        if (ast instanceof CreateIndexQuery createIndex) {
+            return analyseCreateIndex(createIndex);
+        }
+        if (ast instanceof DropIndexQuery dropIndex) {
+            return analyseDropIndex(dropIndex);
         }
         return new UnresolvedQuery(ast);
     }
@@ -105,6 +119,133 @@ public final class DefaultQueryAnalyser implements QueryAnalyser {
             }
         }
         return new AnalyzedDropDatabase(database);
+    }
+
+    private AnalyzedQuery analyseAlterTable(AlterTableQuery query) {
+        return switch (query.action()) {
+            case ADD_COLUMN -> analyseAddColumn(query);
+            case DROP_COLUMN -> analyseDropColumn(query);
+        };
+    }
+
+    private AnalyzedAddColumn analyseAddColumn(AlterTableQuery query) {
+        QualifiedTable target = query.table();
+        String database = target.database();
+        String table = target.table();
+        if (!catalogManager.databaseExists(database)) {
+            throw new AnalysisException("database does not exist: " + database);
+        }
+        if (!catalogManager.tableExists(database, table)) {
+            throw new AnalysisException("table does not exist: " + target.qualifiedName());
+        }
+        String columnName = query.column();
+        TableMetadata existing = catalogManager.getTable(database, table).orElseThrow();
+        for (ColumnMetadata existingColumn : existing.columns()) {
+            if (existingColumn.name().equals(columnName)) {
+                throw new AnalysisException("duplicate column name: " + columnName);
+            }
+        }
+        ColumnMetadata column = ColumnMetadata.define(
+                columnName,
+                toColumnType(query.addColumnType().orElseThrow())
+        );
+        return new AnalyzedAddColumn(database, table, column);
+    }
+
+    private AnalyzedDropColumn analyseDropColumn(AlterTableQuery query) {
+        QualifiedTable target = query.table();
+        String database = target.database();
+        String table = target.table();
+        if (!catalogManager.databaseExists(database)) {
+            throw new AnalysisException("database does not exist: " + database);
+        }
+        if (!catalogManager.tableExists(database, table)) {
+            throw new AnalysisException("table does not exist: " + target.qualifiedName());
+        }
+        String columnName = query.column();
+        TableMetadata existing = catalogManager.getTable(database, table).orElseThrow();
+        ColumnMetadata targetColumn = null;
+        for (ColumnMetadata column : existing.columns()) {
+            if (column.name().equals(columnName)) {
+                targetColumn = column;
+                break;
+            }
+        }
+        if (targetColumn == null) {
+            throw new AnalysisException("column does not exist: " + columnName);
+        }
+        if (existing.columns().size() <= 1) {
+            throw new AnalysisException("cannot drop last column: " + columnName);
+        }
+        int targetColumnId = targetColumn.columnId().orElseThrow();
+        for (IndexMetadata index : existing.indexes()) {
+            if (index.columnIds().contains(targetColumnId)) {
+                throw new AnalysisException("index references column: " + index.name());
+            }
+        }
+        return new AnalyzedDropColumn(database, table, columnName);
+    }
+
+    private AnalyzedCreateIndex analyseCreateIndex(CreateIndexQuery query) {
+        QualifiedTable target = query.table();
+        String database = target.database();
+        String table = target.table();
+        if (!catalogManager.databaseExists(database)) {
+            throw new AnalysisException("database does not exist: " + database);
+        }
+        if (!catalogManager.tableExists(database, table)) {
+            throw new AnalysisException("table does not exist: " + target.qualifiedName());
+        }
+        TableMetadata existing = catalogManager.getTable(database, table).orElseThrow();
+        for (IndexMetadata existingIndex : existing.indexes()) {
+            if (existingIndex.name().equals(query.index())) {
+                throw new AnalysisException("index already exists: " + query.index());
+            }
+        }
+        List<String> columnNames = query.columns();
+        if (columnNames.isEmpty()) {
+            throw new AnalysisException("index must reference at least one column");
+        }
+        List<Integer> columnIds = new ArrayList<>(columnNames.size());
+        for (String columnName : columnNames) {
+            Integer columnId = findColumnId(existing, columnName);
+            if (columnId == null) {
+                throw new AnalysisException("column does not exist: " + columnName);
+            }
+            columnIds.add(columnId);
+        }
+        return new AnalyzedCreateIndex(database, table, query.index(), columnIds);
+    }
+
+    private AnalyzedDropIndex analyseDropIndex(DropIndexQuery query) {
+        String indexName = query.index();
+        String foundDatabase = null;
+        String foundTable = null;
+        for (TableMetadata table : catalogManager.allTables()) {
+            for (IndexMetadata index : table.indexes()) {
+                if (!index.name().equals(indexName)) {
+                    continue;
+                }
+                if (foundDatabase != null) {
+                    throw new AnalysisException("ambiguous index name: " + indexName);
+                }
+                foundDatabase = table.database();
+                foundTable = table.name();
+            }
+        }
+        if (foundDatabase == null) {
+            throw new AnalysisException("index does not exist: " + indexName);
+        }
+        return new AnalyzedDropIndex(foundDatabase, foundTable, indexName);
+    }
+
+    private static Integer findColumnId(TableMetadata table, String columnName) {
+        for (ColumnMetadata column : table.columns()) {
+            if (column.name().equals(columnName)) {
+                return column.columnId().orElseThrow();
+            }
+        }
+        return null;
     }
 
     private static ColumnType toColumnType(ColumnSqlType sqlType) {

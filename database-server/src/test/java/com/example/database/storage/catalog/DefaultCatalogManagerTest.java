@@ -171,6 +171,170 @@ class DefaultCatalogManagerTest {
     }
 
     @Test
+    void addColumnAssignsNextColumnId() {
+        CatalogManager catalog = catalogWithShop();
+        TableMetadata created = catalog.createTable(usersDefinition());
+
+        TableMetadata updated = catalog.addColumn(
+                "shop",
+                "users",
+                ColumnMetadata.define("age", ColumnType.INT)
+        );
+
+        assertEquals(created.tableId(), updated.tableId());
+        assertEquals(3, updated.columns().size());
+        ColumnMetadata age = updated.columns().get(2);
+        assertEquals("age", age.name());
+        assertEquals(ColumnType.INT, age.type());
+        assertEquals(3, age.columnId().orElseThrow());
+        assertTrue(age.nullable());
+        assertEquals(updated, catalog.getTable("shop", "users").orElseThrow());
+    }
+
+    @Test
+    void addColumnRejectsDuplicateName() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(usersDefinition());
+
+        CatalogException ex = assertThrows(
+                CatalogException.class,
+                () -> catalog.addColumn("shop", "users", ColumnMetadata.define("id", ColumnType.BOOLEAN))
+        );
+        assertEquals("duplicate column name: id", ex.getMessage());
+        assertEquals(2, catalog.getTable("shop", "users").orElseThrow().columns().size());
+    }
+
+    @Test
+    void addColumnRejectsMissingTable() {
+        CatalogManager catalog = catalogWithShop();
+
+        CatalogException ex = assertThrows(
+                CatalogException.class,
+                () -> catalog.addColumn("shop", "users", ColumnMetadata.define("age", ColumnType.INT))
+        );
+        assertEquals("table does not exist: shop.users", ex.getMessage());
+    }
+
+    @Test
+    void dropColumnRemovesColumnByName() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(usersDefinition());
+
+        TableMetadata updated = catalog.dropColumn("shop", "users", "name");
+
+        assertEquals(1, updated.columns().size());
+        assertEquals("id", updated.columns().get(0).name());
+        assertEquals(1, updated.columns().get(0).columnId().orElseThrow());
+        assertEquals(updated, catalog.getTable("shop", "users").orElseThrow());
+    }
+
+    @Test
+    void dropColumnRejectsMissingColumn() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(usersDefinition());
+
+        CatalogException ex = assertThrows(
+                CatalogException.class,
+                () -> catalog.dropColumn("shop", "users", "age")
+        );
+        assertEquals("column does not exist: age", ex.getMessage());
+        assertEquals(2, catalog.getTable("shop", "users").orElseThrow().columns().size());
+    }
+
+    @Test
+    void dropColumnRejectsLastColumn() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(ColumnMetadata.define("id", ColumnType.INT))
+        ));
+
+        CatalogException ex = assertThrows(
+                CatalogException.class,
+                () -> catalog.dropColumn("shop", "users", "id")
+        );
+        assertEquals("cannot drop last column: id", ex.getMessage());
+    }
+
+    @Test
+    void dropColumnRejectsWhenIndexReferencesColumn() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(usersDefinition());
+        catalog.createIndex("shop", "users", IndexMetadata.define("idx_users_id", List.of(1)));
+
+        CatalogException ex = assertThrows(
+                CatalogException.class,
+                () -> catalog.dropColumn("shop", "users", "id")
+        );
+        assertEquals("index references column: idx_users_id", ex.getMessage());
+    }
+
+    @Test
+    void createIndexAddsDefinitionAndDropIndexRemovesIt() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(usersDefinition());
+
+        TableMetadata updated = catalog.createIndex(
+                "shop",
+                "users",
+                IndexMetadata.define("idx_users_id", List.of(1))
+        );
+        assertEquals(1, updated.indexes().size());
+        assertEquals("idx_users_id", updated.indexes().get(0).name());
+        assertEquals(List.of(1), updated.indexes().get(0).columnIds());
+
+        catalog.dropIndex("idx_users_id");
+        assertTrue(catalog.getTable("shop", "users").orElseThrow().indexes().isEmpty());
+    }
+
+    @Test
+    void createIndexRejectsDuplicateNameAndUnknownColumnId() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(usersDefinition());
+        catalog.createIndex("shop", "users", IndexMetadata.define("idx_users_id", List.of(1)));
+
+        CatalogException duplicate = assertThrows(
+                CatalogException.class,
+                () -> catalog.createIndex("shop", "users", IndexMetadata.define("idx_users_id", List.of(2)))
+        );
+        assertEquals("index already exists: idx_users_id", duplicate.getMessage());
+
+        CatalogException unknownColumn = assertThrows(
+                CatalogException.class,
+                () -> catalog.createIndex("shop", "users", IndexMetadata.define("idx_name", List.of(99)))
+        );
+        assertEquals("index references unknown column id: 99", unknownColumn.getMessage());
+    }
+
+    @Test
+    void dropIndexRejectsMissingAndAmbiguousNames() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(usersDefinition());
+
+        CatalogException missing = assertThrows(
+                CatalogException.class,
+                () -> catalog.dropIndex("idx_users_id")
+        );
+        assertEquals("index does not exist: idx_users_id", missing.getMessage());
+
+        catalog.createIndex("shop", "users", IndexMetadata.define("shared", List.of(1)));
+        catalog.createDatabase("app");
+        catalog.createTable(TableMetadata.define(
+                "app",
+                "orders",
+                List.of(ColumnMetadata.define("id", ColumnType.INT))
+        ));
+        catalog.createIndex("app", "orders", IndexMetadata.define("shared", List.of(1)));
+
+        CatalogException ambiguous = assertThrows(
+                CatalogException.class,
+                () -> catalog.dropIndex("shared")
+        );
+        assertEquals("ambiguous index name: shared", ambiguous.getMessage());
+    }
+
+    @Test
     void dropTableRemovesTableAndRejectsMissing() {
         CatalogManager catalog = catalogWithShop();
         catalog.createTable(usersDefinition());

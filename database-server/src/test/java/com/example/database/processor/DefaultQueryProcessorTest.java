@@ -11,6 +11,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -130,17 +131,71 @@ class DefaultQueryProcessorTest {
     }
 
     @Test
-    void executeReturnsOkForUnresolvedCreateAlterDropInsertUpdateDelete() {
+    void executeAddColumnPersistsAndRejectsDuplicate() {
         DefaultQueryProcessor processor = newProcessor();
+        assertEquals("OK", processor.execute("CREATE DATABASE shop"));
+        assertEquals("OK", processor.execute("CREATE TABLE shop.users (id INT, name VARCHAR)"));
+
+        assertEquals("OK", processor.execute("ALTER TABLE shop.users ADD age INT"));
+        TableMetadata users = processor.storageEngine().catalogManager().getTable("shop", "users").orElseThrow();
+        assertEquals(3, users.columns().size());
+        assertEquals("age", users.columns().get(2).name());
+        assertEquals(ColumnType.INT, users.columns().get(2).type());
+        assertEquals(3, users.columns().get(2).columnId().orElseThrow());
+
         assertEquals(
-                "OK CREATE INDEX idx ON shop.users (id)",
-                processor.execute("CREATE INDEX idx ON shop.users (id)")
+                "ERROR: duplicate column name: age",
+                processor.execute("ALTER TABLE shop.users ADD age INT")
         );
+    }
+
+    @Test
+    void executeDropColumnPersistsAndRejectsMissing() {
+        DefaultQueryProcessor processor = newProcessor();
+        assertEquals("OK", processor.execute("CREATE DATABASE shop"));
+        assertEquals("OK", processor.execute("CREATE TABLE shop.users (id INT, name VARCHAR)"));
+
+        assertEquals("OK", processor.execute("ALTER TABLE shop.users DROP COLUMN name"));
+        TableMetadata users = processor.storageEngine().catalogManager().getTable("shop", "users").orElseThrow();
+        assertEquals(1, users.columns().size());
+        assertEquals("id", users.columns().get(0).name());
+
         assertEquals(
-                "OK ALTER TABLE shop.users ADD age",
-                processor.execute("ALTER TABLE shop.users ADD age")
+                "ERROR: column does not exist: name",
+                processor.execute("ALTER TABLE shop.users DROP COLUMN name")
         );
-        assertEquals("OK DROP INDEX idx", processor.execute("DROP INDEX idx"));
+    }
+
+    @Test
+    void executeCreateAndDropIndexPersistDefinitions() {
+        DefaultQueryProcessor processor = newProcessor();
+        assertEquals("OK", processor.execute("CREATE DATABASE shop"));
+        assertEquals("OK", processor.execute("CREATE TABLE shop.users (id INT, name VARCHAR)"));
+
+        assertEquals("OK", processor.execute("CREATE INDEX idx_users_id ON shop.users (id)"));
+        TableMetadata users = processor.storageEngine().catalogManager().getTable("shop", "users").orElseThrow();
+        assertEquals(1, users.indexes().size());
+        assertEquals("idx_users_id", users.indexes().get(0).name());
+        assertEquals(List.of(1), users.indexes().get(0).columnIds());
+        assertFalse(users.indexes().get(0).unique());
+
+        assertEquals(
+                "ERROR: index already exists: idx_users_id",
+                processor.execute("CREATE INDEX idx_users_id ON shop.users (name)")
+        );
+
+        assertEquals("OK", processor.execute("DROP INDEX idx_users_id"));
+        assertTrue(processor.storageEngine().catalogManager().getTable("shop", "users").orElseThrow().indexes().isEmpty());
+
+        assertEquals(
+                "ERROR: index does not exist: idx_users_id",
+                processor.execute("DROP INDEX idx_users_id")
+        );
+    }
+
+    @Test
+    void executeReturnsOkForUnresolvedInsertUpdateDelete() {
+        DefaultQueryProcessor processor = newProcessor();
         assertEquals("OK INSERT INTO shop.t VALUES (1)", processor.execute("INSERT INTO shop.t VALUES (1)"));
         assertEquals("OK UPDATE shop.t SET a = 1", processor.execute("UPDATE shop.t SET a = 1"));
         assertEquals("OK DELETE FROM shop.t", processor.execute("DELETE FROM shop.t"));

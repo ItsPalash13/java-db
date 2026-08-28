@@ -52,7 +52,7 @@ DefaultQueryAnalyser
 
 <<interface>>
 AnalyzedQuery
-<<sealed>> permits AnalyzedCreateTable, AnalyzedCreateDatabase, AnalyzedDropTable, AnalyzedDropDatabase, UnresolvedQuery
+<<sealed>> permits AnalyzedCreateTable, AnalyzedCreateDatabase, AnalyzedDropTable, AnalyzedDropDatabase, AnalyzedAddColumn, AnalyzedDropColumn, AnalyzedCreateIndex, AnalyzedDropIndex, UnresolvedQuery
 
 
 <<concrete>>
@@ -79,6 +79,35 @@ AnalyzedDropDatabase
 
 
 <<concrete>>
+AnalyzedAddColumn
+- database: String
+- table: String
+- column: ColumnMetadata   // no id yet; catalog assigns on execute
+
+
+<<concrete>>
+AnalyzedDropColumn
+- database: String
+- table: String
+- column: String
+
+
+<<concrete>>
+AnalyzedCreateIndex
+- database: String
+- table: String
+- index: String
+- columnIds: List<Integer>   // resolved from column names
+
+
+<<concrete>>
+AnalyzedDropIndex
+- database: String
+- table: String
+- index: String
+
+
+<<concrete>>
 UnresolvedQuery
 - source: AstNode
 
@@ -90,12 +119,12 @@ AnalysisException
 
 <<enumeration>>
 QueryType
-CREATE_TABLE, DROP_TABLE, CREATE_DATABASE, DROP_DATABASE, UNRESOLVED
+CREATE_TABLE, DROP_TABLE, CREATE_DATABASE, DROP_DATABASE, ADD_COLUMN, DROP_COLUMN, CREATE_INDEX, DROP_INDEX, UNRESOLVED
 
 
 <<interface>>
 ExecutionPlan
-<<sealed>> permits CreateTablePlan, CreateDatabasePlan, DropTablePlan, DropDatabasePlan, UnresolvedPlan
+<<sealed>> permits CreateTablePlan, CreateDatabasePlan, DropTablePlan, DropDatabasePlan, AddColumnPlan, DropColumnPlan, CreateIndexPlan, DropIndexPlan, UnresolvedPlan
 + queryType(): QueryType
 
 
@@ -120,6 +149,35 @@ DropTablePlan
 <<concrete>>
 DropDatabasePlan
 - database: String
+
+
+<<concrete>>
+AddColumnPlan
+- database: String
+- table: String
+- column: ColumnMetadata   // no id yet; catalog assigns on execute
+
+
+<<concrete>>
+DropColumnPlan
+- database: String
+- table: String
+- column: String
+
+
+<<concrete>>
+CreateIndexPlan
+- database: String
+- table: String
+- index: String
+- columnIds: List<Integer>
+
+
+<<concrete>>
+DropIndexPlan
+- database: String
+- table: String
+- index: String
 
 
 <<concrete>>
@@ -159,7 +217,7 @@ QueryExecutor
 CommandExecutor
 - catalogManager: CatalogManager
 + execute(plan: ExecutionPlan): QueryResult
-    // CREATE_TABLE / DROP_TABLE / CREATE_DATABASE / DROP_DATABASE; writes catalog; not Volcano
+    // CREATE_TABLE / DROP_TABLE / CREATE_DATABASE / DROP_DATABASE / ADD_COLUMN / DROP_COLUMN / CREATE_INDEX / DROP_INDEX; writes catalog; not Volcano
 
 
 <<concrete>>
@@ -198,6 +256,14 @@ owns CatalogStore (JSON + directories); callers never see catalog.json
     // persists one file via owned CatalogStore when constructed with PhysicalStorage
     // throws CatalogException: missing database, duplicate table, duplicate column, empty columns
 + dropTable(database: String, table: String)
++ addColumn(database: String, table: String, column: ColumnMetadata): TableMetadata
+    // appends nullable column with next columnId; rewrites table catalog.json
++ dropColumn(database: String, table: String, column: String): TableMetadata
+    // removes column by name; rejects last column or indexed column; rewrites table catalog.json
++ createIndex(database: String, table: String, index: IndexMetadata): TableMetadata
+    // appends catalog-only index definition; rewrites table catalog.json
++ dropIndex(index: String)
+    // DROP INDEX has no table qualifier; name must be unique across catalog or ambiguous
 + allTables(): List<TableMetadata>
 + databaseExists(name: String): boolean
 + allDatabases(): List<String>
@@ -214,7 +280,7 @@ DefaultCatalogManager
 - databaseNames: Set<String>
 - catalogStore: CatalogStore   // null in memory-only tests; JsonCatalogStore when given PhysicalStorage
 - nextTableId: int             // global across databases
-+ getTable / tableExists / createTable / dropTable / allTables
++ getTable / tableExists / createTable / dropTable / addColumn / dropColumn / createIndex / dropIndex / allTables
 + databaseExists / allDatabases / createDatabase / dropDatabase / load
 
 
@@ -243,8 +309,18 @@ TableMetadata
 - database: String
 - name: String
 - columns: List<ColumnMetadata>
+- indexes: List<IndexMetadata>   // catalog-only definitions; no IndexStore yet
 + define(database, name, columns): TableMetadata
++ withIndexes(indexes): TableMetadata
 + qualifiedName(): String   // shop.users
+
+
+<<concrete>>
+IndexMetadata
+- name: String
+- columnIds: List<Integer>
+- unique: boolean   // Phase 1: always false
++ define(name, columnIds): IndexMetadata
 
 
 <<concrete>>
@@ -574,9 +650,9 @@ DatabaseServer
       │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
       │                        ├── owns ▶ QueryParser (DefaultQueryParser)
       │                        ├── per query ▶ QueryAnalyser (DefaultQueryAnalyser + CatalogManager)
-      │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → CreateTablePlan / DropTablePlan / CreateDatabasePlan / DropDatabasePlan)
+      │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → CreateTablePlan / DropTablePlan / CreateDatabasePlan / DropDatabasePlan / AddColumnPlan / DropColumnPlan)
       │                        ├── QueryDispatcher → ExecutorRegistry
-      │                        │         └── CREATE_TABLE / DROP_TABLE / CREATE_DATABASE / DROP_DATABASE → CommandExecutor → CatalogManager (write)
+      │                        │         └── CREATE_TABLE / DROP_TABLE / CREATE_DATABASE / DROP_DATABASE / ADD_COLUMN / DROP_COLUMN → CommandExecutor → CatalogManager (write)
       │                        │              ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
       │                        │              └── AstNode (Query / Expression)
       │                        └── uses ▶ StorageEngine (shared)
@@ -589,7 +665,7 @@ Design note:
 DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProcessor (no lifecycle).
 NetworkModule owns RequestHandler.
 DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryPlanner; builds DefaultQueryAnalyser and QueryDispatcher on first catalog use from StorageEngine.catalogManager() (requires start()). Uses StorageEngine (does not own its lifecycle).
-execute() lexes, parses, analyses, plans, then runs CREATE/DROP TABLE and CREATE/DROP DATABASE through QueryDispatcher. Table names are database.table. Unresolved plans still echo OK <query>.
+execute() lexes, parses, analyses, plans, then runs CREATE/DROP TABLE, CREATE/DROP DATABASE, and ALTER TABLE ADD/DROP COLUMN through QueryDispatcher. Table names are database.table. Unresolved plans still echo OK <query>.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.processor.lexer (unchanged names).
 Parser types live under com.example.database.processor.parser.

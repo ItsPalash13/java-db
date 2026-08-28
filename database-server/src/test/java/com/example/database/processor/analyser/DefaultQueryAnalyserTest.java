@@ -3,15 +3,19 @@ package com.example.database.processor.analyser;
 import com.example.database.processor.parser.ast.ColumnDefinition;
 import com.example.database.processor.parser.ast.ColumnSqlType;
 import com.example.database.processor.parser.ast.QualifiedTable;
+import com.example.database.processor.parser.ast.query.AlterTableQuery;
 import com.example.database.processor.parser.ast.query.CreateDatabaseQuery;
+import com.example.database.processor.parser.ast.query.CreateIndexQuery;
 import com.example.database.processor.parser.ast.query.CreateTableQuery;
 import com.example.database.processor.parser.ast.query.DropDatabaseQuery;
+import com.example.database.processor.parser.ast.query.DropIndexQuery;
 import com.example.database.processor.parser.ast.query.DropTableQuery;
 import com.example.database.processor.parser.ast.query.SelectQuery;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.ColumnType;
 import com.example.database.storage.catalog.DefaultCatalogManager;
+import com.example.database.storage.catalog.IndexMetadata;
 import com.example.database.storage.catalog.TableMetadata;
 import org.junit.jupiter.api.Test;
 
@@ -218,6 +222,273 @@ class DefaultQueryAnalyserTest {
         );
         assertEquals("database is not empty: shop", ex.getMessage());
         assertEquals(1, catalog.allTables().size());
+    }
+
+    @Test
+    void acceptsAddColumnWhenTableExistsWithoutMutatingCatalog() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(ColumnMetadata.define("id", ColumnType.INT))
+        ));
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalyzedAddColumn analyzed = assertInstanceOf(
+                AnalyzedAddColumn.class,
+                analyser.analyse(addAgeColumnQuery())
+        );
+        assertEquals("shop", analyzed.database());
+        assertEquals("users", analyzed.table());
+        assertEquals("age", analyzed.column().name());
+        assertEquals(ColumnType.INT, analyzed.column().type());
+        assertTrue(analyzed.column().columnId().isEmpty());
+        assertEquals(1, catalog.getTable("shop", "users").orElseThrow().columns().size());
+    }
+
+    @Test
+    void rejectsAddColumnWhenTableMissing() {
+        CatalogManager catalog = catalogWithShop();
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(addAgeColumnQuery())
+        );
+        assertEquals("table does not exist: shop.users", ex.getMessage());
+    }
+
+    @Test
+    void rejectsAddColumnWhenNameAlreadyExists() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(
+                        ColumnMetadata.define("id", ColumnType.INT),
+                        ColumnMetadata.define("age", ColumnType.INT)
+                )
+        ));
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(addAgeColumnQuery())
+        );
+        assertEquals("duplicate column name: age", ex.getMessage());
+    }
+
+    @Test
+    void acceptsDropColumnWhenColumnExistsWithoutMutatingCatalog() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(
+                        ColumnMetadata.define("id", ColumnType.INT),
+                        ColumnMetadata.define("name", ColumnType.VARCHAR)
+                )
+        ));
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalyzedDropColumn analyzed = assertInstanceOf(
+                AnalyzedDropColumn.class,
+                analyser.analyse(dropAgeColumnQuery())
+        );
+        assertEquals("shop", analyzed.database());
+        assertEquals("users", analyzed.table());
+        assertEquals("name", analyzed.column());
+        assertEquals(2, catalog.getTable("shop", "users").orElseThrow().columns().size());
+    }
+
+    @Test
+    void rejectsDropColumnWhenMissing() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(
+                        ColumnMetadata.define("id", ColumnType.INT),
+                        ColumnMetadata.define("name", ColumnType.VARCHAR)
+                )
+        ));
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new AlterTableQuery(
+                        shopUsers(),
+                        AlterTableQuery.Action.DROP_COLUMN,
+                        "age",
+                        null
+                ))
+        );
+        assertEquals("column does not exist: age", ex.getMessage());
+    }
+
+    @Test
+    void rejectsDropColumnWhenLastColumn() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(ColumnMetadata.define("id", ColumnType.INT))
+        ));
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new AlterTableQuery(
+                        shopUsers(),
+                        AlterTableQuery.Action.DROP_COLUMN,
+                        "id",
+                        null
+                ))
+        );
+        assertEquals("cannot drop last column: id", ex.getMessage());
+    }
+
+    @Test
+    void rejectsDropColumnWhenIndexReferencesColumn() {
+        CatalogManager catalog = catalogWithShop();
+        TableMetadata users = catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(
+                        ColumnMetadata.define("id", ColumnType.INT),
+                        ColumnMetadata.define("name", ColumnType.VARCHAR)
+                )
+        ));
+        catalog.createIndex("shop", "users", IndexMetadata.define("idx_users_id", List.of(1)));
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new AlterTableQuery(
+                        shopUsers(),
+                        AlterTableQuery.Action.DROP_COLUMN,
+                        "id",
+                        null
+                ))
+        );
+        assertEquals("index references column: idx_users_id", ex.getMessage());
+        assertEquals(1, catalog.getTable("shop", "users").orElseThrow().indexes().size());
+    }
+
+    @Test
+    void acceptsCreateIndexWhenTableAndColumnsExistWithoutMutatingCatalog() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(ColumnMetadata.define("id", ColumnType.INT))
+        ));
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalyzedCreateIndex analyzed = assertInstanceOf(
+                AnalyzedCreateIndex.class,
+                analyser.analyse(createIndexQuery())
+        );
+        assertEquals("shop", analyzed.database());
+        assertEquals("users", analyzed.table());
+        assertEquals("idx_users_id", analyzed.index());
+        assertEquals(List.of(1), analyzed.columnIds());
+        assertTrue(catalog.getTable("shop", "users").orElseThrow().indexes().isEmpty());
+    }
+
+    @Test
+    void rejectsCreateIndexWhenColumnMissing() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(ColumnMetadata.define("id", ColumnType.INT))
+        ));
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new CreateIndexQuery(
+                        "idx_users_id",
+                        shopUsers(),
+                        List.of("missing")
+                ))
+        );
+        assertEquals("column does not exist: missing", ex.getMessage());
+    }
+
+    @Test
+    void rejectsCreateIndexWhenNameAlreadyExists() {
+        CatalogManager catalog = catalogWithShop();
+        TableMetadata users = catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(ColumnMetadata.define("id", ColumnType.INT))
+        ));
+        catalog.createIndex("shop", "users", IndexMetadata.define("idx_users_id", List.of(1)));
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(createIndexQuery())
+        );
+        assertEquals("index already exists: idx_users_id", ex.getMessage());
+        assertEquals(1, catalog.getTable("shop", "users").orElseThrow().indexes().size());
+    }
+
+    @Test
+    void acceptsDropIndexWhenNameExistsWithoutMutatingCatalog() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(ColumnMetadata.define("id", ColumnType.INT))
+        ));
+        catalog.createIndex("shop", "users", IndexMetadata.define("idx_users_id", List.of(1)));
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalyzedDropIndex analyzed = assertInstanceOf(
+                AnalyzedDropIndex.class,
+                analyser.analyse(new DropIndexQuery("idx_users_id"))
+        );
+        assertEquals("shop", analyzed.database());
+        assertEquals("users", analyzed.table());
+        assertEquals("idx_users_id", analyzed.index());
+        assertEquals(1, catalog.getTable("shop", "users").orElseThrow().indexes().size());
+    }
+
+    @Test
+    void rejectsDropIndexWhenMissing() {
+        CatalogManager catalog = catalogWithShop();
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new DropIndexQuery("idx_users_id"))
+        );
+        assertEquals("index does not exist: idx_users_id", ex.getMessage());
+    }
+
+    private static AlterTableQuery addAgeColumnQuery() {
+        return new AlterTableQuery(
+                shopUsers(),
+                AlterTableQuery.Action.ADD_COLUMN,
+                "age",
+                ColumnSqlType.INT
+        );
+    }
+
+    private static AlterTableQuery dropAgeColumnQuery() {
+        return new AlterTableQuery(
+                shopUsers(),
+                AlterTableQuery.Action.DROP_COLUMN,
+                "name",
+                null
+        );
+    }
+
+    private static CreateIndexQuery createIndexQuery() {
+        return new CreateIndexQuery("idx_users_id", shopUsers(), List.of("id"));
     }
 
     private static CatalogManager catalogWithShop() {

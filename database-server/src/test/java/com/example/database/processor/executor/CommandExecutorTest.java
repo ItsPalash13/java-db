@@ -1,8 +1,12 @@
 package com.example.database.processor.executor;
 
+import com.example.database.processor.planner.AddColumnPlan;
 import com.example.database.processor.planner.CreateDatabasePlan;
+import com.example.database.processor.planner.CreateIndexPlan;
 import com.example.database.processor.planner.CreateTablePlan;
+import com.example.database.processor.planner.DropColumnPlan;
 import com.example.database.processor.planner.DropDatabasePlan;
+import com.example.database.processor.planner.DropIndexPlan;
 import com.example.database.processor.planner.DropTablePlan;
 import com.example.database.processor.planner.UnresolvedPlan;
 import com.example.database.processor.analyser.UnresolvedQuery;
@@ -80,6 +84,89 @@ class CommandExecutorTest {
 
         assertEquals("OK", executor.execute(new DropTablePlan("shop", "users")).toResponse());
         assertFalse(catalog.tableExists("shop", "users"));
+    }
+
+    @Test
+    void addColumnAppendsColumnWithNextId() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(
+                        ColumnMetadata.define("id", ColumnType.INT),
+                        ColumnMetadata.define("name", ColumnType.VARCHAR)
+                )
+        ));
+        CommandExecutor executor = new CommandExecutor(catalog);
+
+        assertEquals(
+                "OK",
+                executor.execute(new AddColumnPlan(
+                        "shop",
+                        "users",
+                        ColumnMetadata.define("age", ColumnType.INT)
+                )).toResponse()
+        );
+
+        TableMetadata users = catalog.getTable("shop", "users").orElseThrow();
+        assertEquals(3, users.columns().size());
+        ColumnMetadata age = users.columns().get(2);
+        assertEquals("age", age.name());
+        assertEquals(ColumnType.INT, age.type());
+        assertEquals(3, age.columnId().orElseThrow());
+        assertTrue(age.nullable());
+    }
+
+    @Test
+    void dropColumnRemovesColumnFromCatalog() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(
+                        ColumnMetadata.define("id", ColumnType.INT),
+                        ColumnMetadata.define("name", ColumnType.VARCHAR)
+                )
+        ));
+        CommandExecutor executor = new CommandExecutor(catalog);
+
+        assertEquals(
+                "OK",
+                executor.execute(new DropColumnPlan("shop", "users", "name")).toResponse()
+        );
+
+        TableMetadata users = catalog.getTable("shop", "users").orElseThrow();
+        assertEquals(1, users.columns().size());
+        assertEquals("id", users.columns().get(0).name());
+        assertEquals(1, users.columns().get(0).columnId().orElseThrow());
+    }
+
+    @Test
+    void createIndexAndDropIndexUpdateCatalog() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(
+                        ColumnMetadata.define("id", ColumnType.INT),
+                        ColumnMetadata.define("name", ColumnType.VARCHAR)
+                )
+        ));
+        CommandExecutor executor = new CommandExecutor(catalog);
+
+        assertEquals(
+                "OK",
+                executor.execute(new CreateIndexPlan("shop", "users", "idx_users_id", List.of(1))).toResponse()
+        );
+        TableMetadata users = catalog.getTable("shop", "users").orElseThrow();
+        assertEquals(1, users.indexes().size());
+        assertEquals("idx_users_id", users.indexes().get(0).name());
+
+        assertEquals(
+                "OK",
+                executor.execute(new DropIndexPlan("shop", "users", "idx_users_id")).toResponse()
+        );
+        assertTrue(catalog.getTable("shop", "users").orElseThrow().indexes().isEmpty());
     }
 
     @Test

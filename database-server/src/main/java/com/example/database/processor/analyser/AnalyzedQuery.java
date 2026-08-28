@@ -9,5 +9,9 @@ public sealed interface AnalyzedQuery permits
         AnalyzedCreateDatabase,
         AnalyzedDropTable,
         AnalyzedDropDatabase,
+        AnalyzedAddColumn,
+        AnalyzedDropColumn,
+        AnalyzedCreateIndex,
+        AnalyzedDropIndex,
         UnresolvedQuery {
 }

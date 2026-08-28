@@ -10,6 +10,7 @@ import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.expr.BinaryExpression;
 import com.example.database.processor.parser.ast.expr.ColumnExpression;
 import com.example.database.processor.parser.ast.expr.LiteralExpression;
+import com.example.database.processor.parser.ast.ColumnSqlType;
 import com.example.database.processor.parser.ast.query.AlterTableQuery;
 import com.example.database.processor.parser.ast.query.CreateDatabaseQuery;
 import com.example.database.processor.parser.ast.query.CreateIndexQuery;
@@ -181,10 +182,17 @@ class DefaultQueryParserTest {
 
     @Test
     void parsesAlterTableAddAndDropColumn() {
-        AlterTableQuery add = parseAs("ALTER TABLE shop.users ADD age", AlterTableQuery.class);
+        AlterTableQuery add = parseAs("ALTER TABLE shop.users ADD age INT", AlterTableQuery.class);
         assertEquals(new QualifiedTable("shop", "users"), add.table());
         assertEquals(AlterTableQuery.Action.ADD_COLUMN, add.action());
         assertEquals("age", add.column());
+        assertEquals(ColumnSqlType.INT, add.addColumnType().orElseThrow());
+
+        AlterTableQuery addWithKeyword = parseAs(
+                "ALTER TABLE shop.users ADD COLUMN age VARCHAR",
+                AlterTableQuery.class
+        );
+        assertEquals(ColumnSqlType.VARCHAR, addWithKeyword.addColumnType().orElseThrow());
 
         AlterTableQuery drop = parseAs(
                 "ALTER TABLE shop.users DROP COLUMN age",
@@ -192,6 +200,14 @@ class DefaultQueryParserTest {
         );
         assertEquals(AlterTableQuery.Action.DROP_COLUMN, drop.action());
         assertEquals("age", drop.column());
+        assertTrue(drop.addColumnType().isEmpty());
+    }
+
+    @Test
+    void rejectsAlterTableAddWithoutType() {
+        List<Token> tokens = lexer.tokenize("ALTER TABLE shop.users ADD age");
+        ParseException ex = assertThrows(ParseException.class, () -> parser.parse(tokens));
+        assertTrue(ex.toResponse().contains("expected column type"));
     }
 
     @Test

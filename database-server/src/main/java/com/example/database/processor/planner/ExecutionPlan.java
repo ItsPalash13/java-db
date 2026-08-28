@@ -8,6 +8,10 @@ public sealed interface ExecutionPlan permits
         CreateDatabasePlan,
         DropTablePlan,
         DropDatabasePlan,
+        AddColumnPlan,
+        DropColumnPlan,
+        CreateIndexPlan,
+        DropIndexPlan,
         UnresolvedPlan {
 
     QueryType queryType();

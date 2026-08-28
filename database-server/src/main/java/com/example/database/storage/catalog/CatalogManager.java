@@ -27,6 +27,38 @@ public interface CatalogManager {
      */
     void dropTable(String database, String table);
 
+    /**
+     * Appends a nullable column with the next column id and rewrites the table catalog file.
+     *
+     * @throws CatalogException if the database or table is missing, or the column name already exists
+     */
+    TableMetadata addColumn(String database, String table, ColumnMetadata column);
+
+    /**
+     * Removes a column by name and rewrites the table catalog file. Column ids on remaining
+     * columns are unchanged — there are no row files to rewrite in Phase 1.
+     *
+     * @throws CatalogException if the database or table is missing, the column is missing,
+     *                          it is the last column, or an index still references the column
+     */
+    TableMetadata dropColumn(String database, String table, String column);
+
+    /**
+     * Adds a catalog-only index definition and rewrites the table catalog file.
+     *
+     * @throws CatalogException if the table is missing, the index name already exists on that table,
+     *                          or a column id is not on the table
+     */
+    TableMetadata createIndex(String database, String table, IndexMetadata index);
+
+    /**
+     * Removes an index definition by name. {@code DROP INDEX name} has no table qualifier, so the
+     * name must be unique across the whole catalog.
+     *
+     * @throws CatalogException if the index is missing or ambiguous
+     */
+    void dropIndex(String index);
+
     /** Insertion-order snapshot of in-memory tables across all databases. */
     List<TableMetadata> allTables();
 

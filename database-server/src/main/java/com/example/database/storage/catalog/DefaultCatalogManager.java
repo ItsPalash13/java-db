@@ -117,6 +117,159 @@ public final class DefaultCatalogManager implements CatalogManager {
     }
 
     @Override
+    public TableMetadata addColumn(String database, String table, ColumnMetadata column) {
+        Objects.requireNonNull(column, "column");
+        requireFolderName(database, "database");
+        requireFolderName(table, "table");
+        TableMetadata existing = getTable(database, table).orElseThrow(
+                () -> new CatalogException("table does not exist: " + database + "." + table)
+        );
+        for (ColumnMetadata existingColumn : existing.columns()) {
+            if (existingColumn.name().equals(column.name())) {
+                throw new CatalogException("duplicate column name: " + column.name());
+            }
+        }
+        int nextColumnId = existing.columns().stream()
+                .mapToInt(c -> c.columnId().orElseThrow())
+                .max()
+                .orElse(0) + 1;
+        // Phase 1: nullable columns only; no row rewrite because there are no row files yet.
+        ColumnMetadata assigned = column.withId(nextColumnId);
+        List<ColumnMetadata> updatedColumns = new ArrayList<>(existing.columns());
+        updatedColumns.add(assigned);
+        TableMetadata updated = existing.withColumns(updatedColumns);
+        tablesIn(database).put(table, updated);
+        try {
+            persistSaveTable(updated);
+        } catch (RuntimeException e) {
+            tablesIn(database).put(table, existing);
+            throw e;
+        }
+        return updated;
+    }
+
+    @Override
+    public TableMetadata dropColumn(String database, String table, String columnName) {
+        requireFolderName(database, "database");
+        requireFolderName(table, "table");
+        Objects.requireNonNull(columnName, "column");
+        TableMetadata existing = getTable(database, table).orElseThrow(
+                () -> new CatalogException("table does not exist: " + database + "." + table)
+        );
+        ColumnMetadata target = null;
+        for (ColumnMetadata column : existing.columns()) {
+            if (column.name().equals(columnName)) {
+                target = column;
+                break;
+            }
+        }
+        if (target == null) {
+            throw new CatalogException("column does not exist: " + columnName);
+        }
+        if (existing.columns().size() <= 1) {
+            throw new CatalogException("cannot drop last column: " + columnName);
+        }
+        int targetColumnId = target.columnId().orElseThrow();
+        for (IndexMetadata index : existing.indexes()) {
+            if (index.columnIds().contains(targetColumnId)) {
+                throw new CatalogException("index references column: " + index.name());
+            }
+        }
+        List<ColumnMetadata> updatedColumns = new ArrayList<>();
+        for (ColumnMetadata column : existing.columns()) {
+            if (!column.name().equals(columnName)) {
+                updatedColumns.add(column);
+            }
+        }
+        // Phase 1: catalog-only; remaining column ids stay as-is because no row files exist yet.
+        TableMetadata updated = existing.withColumns(updatedColumns);
+        tablesIn(database).put(table, updated);
+        try {
+            persistSaveTable(updated);
+        } catch (RuntimeException e) {
+            tablesIn(database).put(table, existing);
+            throw e;
+        }
+        return updated;
+    }
+
+    @Override
+    public TableMetadata createIndex(String database, String table, IndexMetadata index) {
+        Objects.requireNonNull(index, "index");
+        requireFolderName(database, "database");
+        requireFolderName(table, "table");
+        TableMetadata existing = getTable(database, table).orElseThrow(
+                () -> new CatalogException("table does not exist: " + database + "." + table)
+        );
+        for (IndexMetadata existingIndex : existing.indexes()) {
+            if (existingIndex.name().equals(index.name())) {
+                throw new CatalogException("index already exists: " + index.name());
+            }
+        }
+        Set<Integer> tableColumnIds = new HashSet<>();
+        for (ColumnMetadata column : existing.columns()) {
+            tableColumnIds.add(column.columnId().orElseThrow());
+        }
+        for (Integer columnId : index.columnIds()) {
+            if (!tableColumnIds.contains(columnId)) {
+                throw new CatalogException("index references unknown column id: " + columnId);
+            }
+        }
+        List<IndexMetadata> updatedIndexes = new ArrayList<>(existing.indexes());
+        updatedIndexes.add(index);
+        TableMetadata updated = existing.withIndexes(updatedIndexes);
+        tablesIn(database).put(table, updated);
+        try {
+            persistSaveTable(updated);
+        } catch (RuntimeException e) {
+            tablesIn(database).put(table, existing);
+            throw e;
+        }
+        return updated;
+    }
+
+    @Override
+    public void dropIndex(String indexName) {
+        Objects.requireNonNull(indexName, "indexName");
+        if (indexName.isBlank()) {
+            throw new CatalogException("index name must not be blank");
+        }
+        String foundDatabase = null;
+        String foundTable = null;
+        TableMetadata foundMetadata = null;
+        for (TableMetadata table : allTables()) {
+            for (IndexMetadata index : table.indexes()) {
+                if (!index.name().equals(indexName)) {
+                    continue;
+                }
+                if (foundMetadata != null) {
+                    throw new CatalogException("ambiguous index name: " + indexName);
+                }
+                foundDatabase = table.database();
+                foundTable = table.name();
+                foundMetadata = table;
+            }
+        }
+        if (foundMetadata == null) {
+            throw new CatalogException("index does not exist: " + indexName);
+        }
+        List<IndexMetadata> remaining = new ArrayList<>();
+        for (IndexMetadata index : foundMetadata.indexes()) {
+            if (!index.name().equals(indexName)) {
+                remaining.add(index);
+            }
+        }
+        TableMetadata updated = foundMetadata.withIndexes(remaining);
+        tablesIn(foundDatabase).put(foundTable, updated);
+        try {
+            persistSaveTable(updated);
+        } catch (RuntimeException e) {
+            tablesIn(foundDatabase).put(foundTable, foundMetadata);
+            throw e;
+        }
+    }
+
+    @Override
     public List<TableMetadata> allTables() {
         List<TableMetadata> tables = new ArrayList<>();
         for (Map<String, TableMetadata> perDatabase : tablesByDatabase.values()) {
