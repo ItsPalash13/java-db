@@ -53,7 +53,10 @@ class TcpNetworkModuleTest {
             int length = ByteBuffer.wrap(lengthBytes).getInt();
             String response = new String(in.readNBytes(length), StandardCharsets.UTF_8);
 
-            assertEquals("OK SELECT * FROM shop.t", response);
+            assertEquals(
+                    "{\"v\":1,\"messages\":[{\"type\":\"OK\",\"rowsAffected\":0}]}",
+                    response
+            );
         } finally {
             server.stop();
         }

@@ -40,8 +40,10 @@
                 <version>3.5.0</version>
                 <configuration>
                     <mainClass>com.example.client.Main</mainClass>
+                    <!-- Without this, exec:java may not attach stdin/stdout for the REPL prompt. -->
+                    <interactive>true</interactive>
                 </configuration>
             </plugin>
         </plugins>
-    </build>
+   </build>
 </project>

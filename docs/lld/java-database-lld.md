@@ -669,6 +669,42 @@ classDiagram
         +encode()
     }
 
+    class JsonWireResponse {
+        <<concrete>>
+        -WireResponse wireResponse
+        +encode()
+    }
+
+    class WireProtocol {
+        <<concrete>>
+        +VERSION int
+    }
+
+    class WireMessage {
+        <<sealed>>
+        Error
+        Ok
+        ResultSet
+        Done
+    }
+
+    class WireResponse {
+        <<concrete>>
+        -int version
+        -List messages
+    }
+
+    class WireResponseEncoder {
+        <<concrete>>
+        +fromProcessorText(String) WireResponse
+    }
+
+    class WireResponseJson {
+        <<concrete>>
+        +toBytes(WireResponse) byte[]
+        +toJson(WireResponse) String
+    }
+
     DatabaseServer --> StorageEngine : owns
     DatabaseServer --> NetworkModule : owns
     DatabaseServer --> QueryProcessor : uses
@@ -795,6 +831,12 @@ classDiagram
     ClientConnection <|.. TcpClientConnection
     Request <|.. TcpRequest
     Response <|.. TcpResponse
+    Response <|.. JsonWireResponse
+
+    DefaultRequestHandler --> WireResponseEncoder : fromProcessorText
+    WireResponseEncoder --> WireResponse
+    JsonWireResponse --> WireResponse : wireResponse
+    JsonWireResponse --> WireResponseJson : encode
 
     TcpNetworkModule --> ServerSocket : serverSocket
     ServerSocket --> ClientConnection : accept()

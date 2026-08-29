@@ -629,6 +629,59 @@ TcpResponse
 + encode()
 
 
+<<concrete>>
+JsonWireResponse
+- wireResponse: WireResponse
++ encode()
+
+
+<<concrete>>
+WireProtocol
++ VERSION: int
+
+
+<<concrete>>
+WireMessage
+<<sealed>>
+Error / Ok / ResultSet / Done
+
+
+<<concrete>>
+WireResponse
+- version: int
+- messages: List~WireMessage~
+
+
+<<concrete>>
+WireResponseEncoder
++ fromProcessorText(processorText: String): WireResponse
+
+
+<<concrete>>
+WireResponseJson
++ toBytes(response: WireResponse): byte[]
++ toJson(response: WireResponse): String
+
+
+database-client (separate module; not constructed by DatabaseServer)
+<<concrete>>
+DatabaseClient
+- connection: ClientConnection
++ executeQuery(sql: String): WireResponse
++ close()
+
+<<concrete>>
+ClientConnection (client module)
++ send(request: String)
++ receive(): String
++ close()
+
+<<concrete>>
+WireResponse (client.wire)
+WireResponseJson (client.wire, parse)
+ResponsePrinter
+
+
 Relationship
 
 DatabaseServer
@@ -659,11 +712,13 @@ DatabaseServer
       └── owns ▶ NetworkModule
                     │
                     ├── creates/owns ▶ RequestHandler(queryProcessor)
+                    │         └── DefaultRequestHandler → WireResponseEncoder → JsonWireResponse
                     └── ServerSocket → ClientConnection
 
 Design note:
 DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProcessor (no lifecycle).
 NetworkModule owns RequestHandler.
+Wire protocol v1: request frame = plain UTF-8 SQL; response frame = JSON WireResponse (see docs/protocol/wire-protocol.md). QueryProcessor still returns plain "OK" / "ERROR: …" strings; DefaultRequestHandler encodes at the network edge.
 DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryPlanner; builds DefaultQueryAnalyser and QueryDispatcher on first catalog use from StorageEngine.catalogManager() (requires start()). Uses StorageEngine (does not own its lifecycle).
 execute() lexes, parses, analyses, plans, then runs CREATE/DROP TABLE, CREATE/DROP DATABASE, and ALTER TABLE ADD/DROP COLUMN through QueryDispatcher. Table names are database.table. Unresolved plans still echo OK <query>.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
@@ -671,8 +726,9 @@ Lexer types live under com.example.database.processor.lexer (unchanged names).
 Parser types live under com.example.database.processor.parser.
 DefaultQueryParser dispatches via ParserRegistry; statement parsers own grammar; AST holds structure.
 DatabaseServer passes QueryProcessor into NetworkModule; NetworkModule assigns it to RequestHandler.
-RequestHandler bridges network and query processor.
+RequestHandler bridges network and query processor (JSON wire responses via JsonWireResponse).
 java.net.Socket classes stay inside the TCP implementations.
+database-client is a separate Maven module: DatabaseClient REPL over the same length-prefixed TCP framing; parses JSON with client.wire.WireResponseJson, prints via ResponsePrinter. Not wired from Main/StorageEngine.
 
 Catalog (Phase 1.1–1.3):
 CatalogManager is a StorageEngine submodule and owns CatalogStore.

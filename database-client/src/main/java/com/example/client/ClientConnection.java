@@ -13,6 +13,8 @@ import java.nio.charset.StandardCharsets;
 /**
  * Client-side TCP session using the same length-prefixed framing as the server
  * ({@code [4-byte big-endian length][UTF-8 payload]}, max 1 MiB).
+ * Request payloads are plain SQL; response payloads are JSON wire messages (see
+ * {@code docs/protocol/wire-protocol.md}) — framing stays here, not in the codec.
  */
 public final class ClientConnection implements AutoCloseable {
 
