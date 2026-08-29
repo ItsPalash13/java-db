@@ -29,6 +29,11 @@ public enum TokenCatalog {
     ROLLBACK,
     TRANSACTION,
 
+    DESCRIBE,
+    SHOW,
+    DATABASES,
+    TABLES,
+
     // column types (CREATE TABLE)
     INT,
     VARCHAR,

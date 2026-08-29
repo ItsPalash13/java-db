@@ -26,7 +26,8 @@ DefaultRequestHandler
 
 <<interface>>
 QueryProcessor
-+ execute(query: String): String
++ execute(query: String): QueryResult
++ executeText(query: String): String   // default: execute().toResponse()
 
 
 <<concrete>>
@@ -36,7 +37,7 @@ DefaultQueryProcessor
 - planner: QueryPlanner
 - queryDispatcher: QueryDispatcher   // lookup + delegate on caller thread; not a thread pool
 - storageEngine: StorageEngine
-+ execute(query: String): String
++ execute(query: String): QueryResult
 
 
 <<interface>>
@@ -52,7 +53,7 @@ DefaultQueryAnalyser
 
 <<interface>>
 AnalyzedQuery
-<<sealed>> permits AnalyzedCreateTable, AnalyzedCreateDatabase, AnalyzedDropTable, AnalyzedDropDatabase, AnalyzedAddColumn, AnalyzedDropColumn, AnalyzedCreateIndex, AnalyzedDropIndex, UnresolvedQuery
+<<sealed>> permits AnalyzedCreateTable, AnalyzedCreateDatabase, AnalyzedDropTable, AnalyzedDropDatabase, AnalyzedAddColumn, AnalyzedDropColumn, AnalyzedCreateIndex, AnalyzedDropIndex, AnalyzedBegin, AnalyzedCommit, AnalyzedRollback, AnalyzedDescribeTable, AnalyzedShowDatabases, AnalyzedShowTables, UnresolvedQuery
 
 
 <<concrete>>
@@ -108,6 +109,21 @@ AnalyzedDropIndex
 
 
 <<concrete>>
+AnalyzedDescribeTable
+- database: String
+- table: String
+
+
+<<concrete>>
+AnalyzedShowDatabases
+
+
+<<concrete>>
+AnalyzedShowTables
+- database: String
+
+
+<<concrete>>
 UnresolvedQuery
 - source: AstNode
 
@@ -119,12 +135,12 @@ AnalysisException
 
 <<enumeration>>
 QueryType
-CREATE_TABLE, DROP_TABLE, CREATE_DATABASE, DROP_DATABASE, ADD_COLUMN, DROP_COLUMN, CREATE_INDEX, DROP_INDEX, UNRESOLVED
+CREATE_TABLE, DROP_TABLE, CREATE_DATABASE, DROP_DATABASE, ADD_COLUMN, DROP_COLUMN, CREATE_INDEX, DROP_INDEX, BEGIN, COMMIT, ROLLBACK, DESCRIBE_TABLE, SHOW_DATABASES, SHOW_TABLES, UNRESOLVED
 
 
 <<interface>>
 ExecutionPlan
-<<sealed>> permits CreateTablePlan, CreateDatabasePlan, DropTablePlan, DropDatabasePlan, AddColumnPlan, DropColumnPlan, CreateIndexPlan, DropIndexPlan, UnresolvedPlan
+<<sealed>> permits CreateTablePlan, CreateDatabasePlan, DropTablePlan, DropDatabasePlan, AddColumnPlan, DropColumnPlan, CreateIndexPlan, DropIndexPlan, BeginPlan, CommitPlan, RollbackPlan, DescribeTablePlan, ShowDatabasesPlan, ShowTablesPlan, UnresolvedPlan
 + queryType(): QueryType
 
 
@@ -198,9 +214,17 @@ DefaultQueryPlanner
 
 <<concrete>>
 QueryResult
-- message: String
+- errorMessage: String
+- okMessage: String
+- columns: List<WireMessage.ResultSet.Column>
+- rows: List<List<Object>>
 + ok(): QueryResult
-+ toResponse(): String
++ okEcho(message: String): QueryResult
++ error(message: String): QueryResult
++ resultSet(columns, rows): QueryResult
++ hasResultSet(): boolean
++ toResponse(): String   // "OK", "OK <echo>", or error text
++ toWireResponse(): WireResponse   // Ok / Error / ResultSet+Done
 
 
 <<concrete>>
@@ -223,6 +247,23 @@ CommandExecutor
     // begin txn → catalog lock → append+flush WAL → catalog write → unlock → commit
     // CREATE_TABLE / DROP_TABLE / CREATE_DATABASE / DROP_DATABASE / ADD_COLUMN / DROP_COLUMN / CREATE_INDEX / DROP_INDEX
     // writes catalog; not Volcano
+
+
+<<concrete>>
+DescribeExecutor
+- catalogManager: CatalogManager
++ execute(plan: ExecutionPlan): QueryResult
+    // read-only catalog introspection: DESCRIBE / SHOW DATABASES / SHOW TABLES
+    // no TransactionManager, LockManager, or WALManager
+
+
+<<concrete>>
+TransactionControlExecutor
+- transactionManager: TransactionManager
+- lockManager: LockManager
+- catalogManager: CatalogManager
++ execute(plan: ExecutionPlan): QueryResult
+    // BEGIN / COMMIT / ROLLBACK explicit transactions
 
 
 <<concrete>>
@@ -367,6 +408,9 @@ owns concurrency locks (catalog exclusive today; table S/X later)
 + runExclusiveCatalog(action: Runnable)
 + runExclusiveCatalog(action: Supplier<T>): T
     // blocking ReentrantLock; unlock in finally
++ lockExclusiveCatalog()
++ tryLockExclusiveCatalog(): boolean   // non-blocking; used by explicit BEGIN
++ unlockExclusiveCatalog()
 
 
 <<concrete>>
@@ -374,6 +418,7 @@ DefaultLockManager
 - catalogLock: ReentrantLock
 + runExclusiveCatalog(action: Runnable)
 + runExclusiveCatalog(action: Supplier<T>): T
++ lockExclusiveCatalog / tryLockExclusiveCatalog / unlockExclusiveCatalog
 
 
 <<interface>>
@@ -385,6 +430,8 @@ owns transaction lifecycle (implicit single-statement + explicit BEGIN sessions)
 + beginExplicit(lock: LockManager, catalog: CatalogManager)
 + commitExplicit(lock: LockManager, catalog: CatalogManager)
 + rollbackExplicit(lock: LockManager, catalog: CatalogManager)
++ endConnectionSession(lock: LockManager, catalog: CatalogManager)
+    // disconnect cleanup: rollback open explicit txn on this thread if any
 + inExplicitTransaction(): boolean
 + currentTxnId(): int
 
@@ -395,7 +442,7 @@ DefaultTransactionManager
 - nextTxnId: AtomicInteger
 - context: ThreadLocal<TransactionContext>
 + implicit: allocate txnId → append DDL → append COMMIT → flush
-+ explicit: BEGIN holds catalog lock + defer catalog persist; COMMIT flushes WAL + persistChangesSince
++ explicit: BEGIN uses tryLockExclusiveCatalog (fail fast "catalog is locked"); holds lock until COMMIT/ROLLBACK
 
 
 <<concrete>>
@@ -785,10 +832,11 @@ DatabaseServer
       │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
       │                        ├── owns ▶ QueryParser (DefaultQueryParser)
       │                        ├── per query ▶ QueryAnalyser (DefaultQueryAnalyser + CatalogManager)
-      │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → CreateTablePlan / DropTablePlan / CreateDatabasePlan / DropDatabasePlan / AddColumnPlan / DropColumnPlan)
+      │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → DDL plans + DescribeTablePlan / ShowDatabasesPlan / ShowTablesPlan)
       │                        ├── QueryDispatcher → ExecutorRegistry
-      │                        │         └── CREATE_TABLE / DROP_TABLE / CREATE_DATABASE / DROP_DATABASE / ADD_COLUMN / DROP_COLUMN / CREATE_INDEX / DROP_INDEX
-      │                        │               → CommandExecutor → TransactionManager + LockManager + WALManager + CatalogManager
+      │                        │         ├── CREATE_TABLE / DROP_TABLE / … / DROP_INDEX → CommandExecutor
+      │                        │         ├── BEGIN / COMMIT / ROLLBACK → TransactionControlExecutor
+      │                        │         └── DESCRIBE_TABLE / SHOW_DATABASES / SHOW_TABLES → DescribeExecutor (catalog read only)
       │                        │              ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
       │                        │              └── AstNode (Query / Expression)
       │                        └── uses ▶ StorageEngine (shared)
@@ -801,9 +849,9 @@ DatabaseServer
 Design note:
 DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProcessor (no lifecycle).
 NetworkModule owns RequestHandler.
-Wire protocol v1: request frame = plain UTF-8 SQL; response frame = JSON WireResponse (see docs/protocol/wire-protocol.md). QueryProcessor still returns plain "OK" / "ERROR: …" strings; DefaultRequestHandler encodes at the network edge.
+Wire protocol v1: request frame = plain UTF-8 SQL; response frame = JSON WireResponse (see docs/protocol/wire-protocol.md). QueryProcessor returns QueryResult; DefaultRequestHandler calls result.toWireResponse() (Ok, Error, or ResultSet+Done). executeText() / toResponse() remain for tests and logging.
 DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryPlanner; builds DefaultQueryAnalyser and QueryDispatcher on first catalog use from StorageEngine managers (requires start()). Uses StorageEngine (does not own its lifecycle).
-execute() lexes, parses, analyses, plans, then runs DDL through QueryDispatcher. Implicit DDL: TransactionManager.runInTransaction → LockManager.runExclusiveCatalog → WAL append (txnId) → CatalogManager → COMMIT+flush. Explicit BEGIN: TransactionControlExecutor holds lock, defer catalog persist until COMMIT. Table names are database.table. Unresolved plans still echo OK <query>.
+execute() lexes, parses, analyses, plans, then runs plans through QueryDispatcher. Implicit DDL: TransactionManager.runInTransaction → LockManager.runExclusiveCatalog → WAL append (txnId) → CatalogManager → COMMIT+flush. Explicit BEGIN: TransactionControlExecutor holds lock, defer catalog persist until COMMIT. DESCRIBE / SHOW DATABASES / SHOW TABLES read CatalogManager only (no txn, lock, or WAL). Table names are database.table. Unresolved plans still echo OK <query>.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.processor.lexer (unchanged names).
 Parser types live under com.example.database.processor.parser.

@@ -26,6 +26,13 @@ public interface LockManager {
      */
     void lockExclusiveCatalog();
 
+    /**
+     * Non-blocking attempt to take the catalog lock for explicit {@code BEGIN}.
+     *
+     * @return {@code true} if this thread now holds the lock
+     */
+    boolean tryLockExclusiveCatalog();
+
     /** Releases the catalog lock taken by {@link #lockExclusiveCatalog()}. */
     void unlockExclusiveCatalog();
 }

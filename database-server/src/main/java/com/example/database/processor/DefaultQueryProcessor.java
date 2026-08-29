@@ -5,6 +5,7 @@ import com.example.database.processor.analyser.AnalyzedQuery;
 import com.example.database.processor.analyser.DefaultQueryAnalyser;
 import com.example.database.processor.analyser.QueryAnalyser;
 import com.example.database.processor.executor.CommandExecutor;
+import com.example.database.processor.executor.DescribeExecutor;
 import com.example.database.processor.executor.ExecutionException;
 import com.example.database.processor.executor.ExecutorRegistry;
 import com.example.database.processor.executor.QueryDispatcher;
@@ -32,9 +33,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Lex → parse → analyse → plan → execute. CREATE/DROP TABLE, CREATE/DROP DATABASE,
- * ALTER TABLE ADD/DROP COLUMN, and CREATE/DROP INDEX write the catalog; other statements still echo
- * {@code OK <query>} until their own executor branches.
+ * Lex → parse → analyse → plan → execute. DDL writes the catalog; DESCRIBE/SHOW read it.
  */
 public final class DefaultQueryProcessor implements QueryProcessor {
 
@@ -64,7 +63,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
     }
 
     @Override
-    public String execute(String query) {
+    public QueryResult execute(String query) {
         System.out.println("[QueryProcessor] executing query: " + query);
         final List<Token> tokens;
         try {
@@ -72,7 +71,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
         } catch (LexException e) {
             String error = e.toResponse();
             System.out.println("[QueryProcessor] lex error: " + error);
-            return error;
+            return QueryResult.error(error);
         }
         System.out.println("[QueryProcessor] tokens: " + tokens);
         final AstNode ast;
@@ -81,7 +80,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
         } catch (ParseException e) {
             String error = e.toResponse();
             System.out.println("[QueryProcessor] parse error: " + error);
-            return error;
+            return QueryResult.error(error);
         }
         System.out.println("[QueryProcessor] ast: " + ast);
         final AnalyzedQuery analyzed;
@@ -91,12 +90,11 @@ public final class DefaultQueryProcessor implements QueryProcessor {
         } catch (AnalysisException e) {
             String error = e.toResponse();
             System.out.println("[QueryProcessor] analyse error: " + error);
-            return error;
+            return QueryResult.error(error);
         } catch (IllegalStateException e) {
-            // catalogManager() when StorageEngine.start() has not run yet.
             String error = "ERROR: " + e.getMessage();
             System.out.println("[QueryProcessor] analyse error: " + error);
-            return error;
+            return QueryResult.error(error);
         }
         System.out.println("[QueryProcessor] analysed: " + analyzed);
         ExecutionPlan plan = planner.plan(analyzed);
@@ -104,23 +102,20 @@ public final class DefaultQueryProcessor implements QueryProcessor {
         if (plan instanceof UnresolvedPlan) {
             String result = "OK " + query;
             System.out.println("[QueryProcessor] result: " + result);
-            return result;
+            return QueryResult.okEcho(result);
         }
         try {
             QueryResult result = queryDispatcher().execute(plan);
-            String response = result.toResponse();
-            System.out.println("[QueryProcessor] result: " + response);
-            return response;
+            System.out.println("[QueryProcessor] result: " + result.toResponse());
+            return result;
         } catch (ExecutionException e) {
             String error = e.toResponse();
             System.out.println("[QueryProcessor] execute error: " + error);
-            return error;
+            return QueryResult.error(error);
         }
     }
 
     private QueryDispatcher queryDispatcher() {
-        // Built after start(): CatalogManager is illegal until StorageEngine.start(),
-        // and Main constructs this processor before DatabaseServer.start().
         if (queryDispatcher == null) {
             ExecutorRegistry registry = new ExecutorRegistry();
             CommandExecutor commands = new CommandExecutor(
@@ -134,6 +129,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
                     storageEngine.lockManager(),
                     storageEngine.catalogManager()
             );
+            DescribeExecutor describe = new DescribeExecutor(storageEngine.catalogManager());
             registry.register(QueryType.CREATE_TABLE, commands);
             registry.register(QueryType.DROP_TABLE, commands);
             registry.register(QueryType.CREATE_DATABASE, commands);
@@ -145,6 +141,9 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             registry.register(QueryType.BEGIN, transactionControl);
             registry.register(QueryType.COMMIT, transactionControl);
             registry.register(QueryType.ROLLBACK, transactionControl);
+            registry.register(QueryType.DESCRIBE_TABLE, describe);
+            registry.register(QueryType.SHOW_DATABASES, describe);
+            registry.register(QueryType.SHOW_TABLES, describe);
             queryDispatcher = new QueryDispatcher(registry);
         }
         return queryDispatcher;

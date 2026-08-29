@@ -57,23 +57,11 @@ public final class ResponsePrinter {
                 widths[c] = Math.max(widths[c], cell.length());
             }
         }
-        printSeparator(columns, widths);
         printRow(columns.stream().map(WireMessage.ResultSet.Column::name).toList(), widths);
         printRule(widths);
         for (List<Object> row : rows) {
             printRow(row, widths);
         }
-        out.println("(" + rows.size() + " rows)");
-    }
-
-    private void printSeparator(List<WireMessage.ResultSet.Column> columns, int[] widths) {
-        for (int c = 0; c < columns.size(); c++) {
-            if (c > 0) {
-                out.print(" | ");
-            }
-            out.print(pad(columns.get(c).name(), widths[c]));
-        }
-        out.println();
     }
 
     private void printRow(List<?> cells, int[] widths) {

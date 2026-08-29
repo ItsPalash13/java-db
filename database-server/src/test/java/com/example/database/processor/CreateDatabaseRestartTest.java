@@ -29,7 +29,7 @@ class CreateDatabaseRestartTest {
         first.start();
         try {
             DefaultQueryProcessor processor = new DefaultQueryProcessor(first);
-            assertEquals("OK", processor.execute("CREATE DATABASE shop"));
+            assertEquals("OK", processor.executeText("CREATE DATABASE shop"));
             assertTrue(first.catalogManager().databaseExists("shop"));
             assertTrue(Files.isDirectory(root.resolve("shop")));
         } finally {
@@ -43,9 +43,9 @@ class CreateDatabaseRestartTest {
             DefaultQueryProcessor processor = new DefaultQueryProcessor(second);
             assertEquals(
                     "ERROR: database already exists: shop",
-                    processor.execute("CREATE DATABASE shop")
+                    processor.executeText("CREATE DATABASE shop")
             );
-            assertEquals("OK", processor.execute("DROP DATABASE shop"));
+            assertEquals("OK", processor.executeText("DROP DATABASE shop"));
             assertFalse(second.catalogManager().databaseExists("shop"));
         } finally {
             second.stop();
@@ -58,7 +58,7 @@ class CreateDatabaseRestartTest {
             DefaultQueryProcessor processor = new DefaultQueryProcessor(third);
             assertEquals(
                     "ERROR: database does not exist: shop",
-                    processor.execute("DROP DATABASE shop")
+                    processor.executeText("DROP DATABASE shop")
             );
         } finally {
             third.stop();

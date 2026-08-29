@@ -77,7 +77,10 @@ public final class DefaultTransactionManager implements TransactionManager {
         if (context.get().active()) {
             throw new IllegalStateException("transaction already active");
         }
-        lockManager.lockExclusiveCatalog();
+        // Fail fast so a second connection gets an error instead of blocking forever.
+        if (!lockManager.tryLockExclusiveCatalog()) {
+            throw new IllegalStateException("catalog is locked");
+        }
         try {
             int txnId = allocateTxnId();
             CatalogSnapshot snapshot = catalogManager.snapshot();
@@ -131,6 +134,17 @@ public final class DefaultTransactionManager implements TransactionManager {
         walManager.discardPending();
         session.clear();
         lockManager.unlockExclusiveCatalog();
+    }
+
+    @Override
+    public void endConnectionSession(LockManager lockManager, CatalogManager catalogManager) {
+        Objects.requireNonNull(lockManager, "lockManager");
+        Objects.requireNonNull(catalogManager, "catalogManager");
+        if (inExplicitTransaction()) {
+            rollbackExplicit(lockManager, catalogManager);
+            return;
+        }
+        context.get().clear();
     }
 
     @Override

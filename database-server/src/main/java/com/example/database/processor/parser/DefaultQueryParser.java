@@ -8,10 +8,12 @@ import com.example.database.processor.parser.statement.BeginParser;
 import com.example.database.processor.parser.statement.CommitParser;
 import com.example.database.processor.parser.statement.CreateParser;
 import com.example.database.processor.parser.statement.DeleteParser;
+import com.example.database.processor.parser.statement.DescribeParser;
 import com.example.database.processor.parser.statement.DropParser;
 import com.example.database.processor.parser.statement.InsertParser;
 import com.example.database.processor.parser.statement.RollbackParser;
 import com.example.database.processor.parser.statement.SelectParser;
+import com.example.database.processor.parser.statement.ShowParser;
 import com.example.database.processor.parser.statement.UpdateParser;
 
 import java.util.List;
@@ -36,6 +38,8 @@ public final class DefaultQueryParser implements QueryParser {
         registry.register(TokenCatalog.BEGIN, new BeginParser());
         registry.register(TokenCatalog.COMMIT, new CommitParser());
         registry.register(TokenCatalog.ROLLBACK, new RollbackParser());
+        registry.register(TokenCatalog.DESCRIBE, new DescribeParser());
+        registry.register(TokenCatalog.SHOW, new ShowParser());
     }
 
     @Override

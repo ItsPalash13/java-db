@@ -10,4 +10,8 @@ import com.example.database.network.Response;
 public interface RequestHandler {
 
     Response handle(Request request);
+
+    /** Release per-connection session state when the TCP peer disconnects. */
+    default void onConnectionClosed() {
+    }
 }

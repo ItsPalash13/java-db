@@ -39,6 +39,11 @@ public final class DefaultLockManager implements LockManager {
     }
 
     @Override
+    public boolean tryLockExclusiveCatalog() {
+        return catalogLock.tryLock();
+    }
+
+    @Override
     public void unlockExclusiveCatalog() {
         catalogLock.unlock();
     }

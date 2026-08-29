@@ -40,6 +40,12 @@ public interface TransactionManager {
 
     void rollbackExplicit(LockManager lockManager, CatalogManager catalogManager);
 
+    /**
+     * Client disconnected: roll back an open explicit txn on this thread and release
+     * the catalog lock. Safe to call when no transaction is active.
+     */
+    void endConnectionSession(LockManager lockManager, CatalogManager catalogManager);
+
     /** Whether this thread is inside an explicit {@code BEGIN} session. */
     boolean inExplicitTransaction();
 

@@ -10,10 +10,13 @@ import com.example.database.processor.parser.ast.query.CommitQuery;
 import com.example.database.processor.parser.ast.query.CreateDatabaseQuery;
 import com.example.database.processor.parser.ast.query.CreateIndexQuery;
 import com.example.database.processor.parser.ast.query.CreateTableQuery;
+import com.example.database.processor.parser.ast.query.DescribeTableQuery;
 import com.example.database.processor.parser.ast.query.DropDatabaseQuery;
 import com.example.database.processor.parser.ast.query.DropIndexQuery;
 import com.example.database.processor.parser.ast.query.DropTableQuery;
 import com.example.database.processor.parser.ast.query.RollbackQuery;
+import com.example.database.processor.parser.ast.query.ShowDatabasesQuery;
+import com.example.database.processor.parser.ast.query.ShowTablesQuery;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.ColumnType;
@@ -71,7 +74,37 @@ public final class DefaultQueryAnalyser implements QueryAnalyser {
         if (ast instanceof RollbackQuery) {
             return new AnalyzedRollback();
         }
+        if (ast instanceof DescribeTableQuery describe) {
+            return analyseDescribeTable(describe);
+        }
+        if (ast instanceof ShowDatabasesQuery) {
+            return new AnalyzedShowDatabases();
+        }
+        if (ast instanceof ShowTablesQuery showTables) {
+            return analyseShowTables(showTables);
+        }
         return new UnresolvedQuery(ast);
+    }
+
+    private AnalyzedDescribeTable analyseDescribeTable(DescribeTableQuery query) {
+        QualifiedTable target = query.table();
+        String database = target.database();
+        String table = target.table();
+        if (!catalogManager.databaseExists(database)) {
+            throw new AnalysisException("database does not exist: " + database);
+        }
+        if (!catalogManager.tableExists(database, table)) {
+            throw new AnalysisException("table does not exist: " + target.qualifiedName());
+        }
+        return new AnalyzedDescribeTable(database, table);
+    }
+
+    private AnalyzedShowTables analyseShowTables(ShowTablesQuery query) {
+        String database = query.database();
+        if (!catalogManager.databaseExists(database)) {
+            throw new AnalysisException("database does not exist: " + database);
+        }
+        return new AnalyzedShowTables(database);
     }
 
     private AnalyzedCreateTable analyseCreateTable(CreateTableQuery query) {

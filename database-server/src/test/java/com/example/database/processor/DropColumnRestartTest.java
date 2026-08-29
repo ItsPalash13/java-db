@@ -32,9 +32,9 @@ class DropColumnRestartTest {
         first.start();
         try {
             DefaultQueryProcessor processor = new DefaultQueryProcessor(first);
-            assertEquals("OK", processor.execute("CREATE DATABASE shop"));
-            assertEquals("OK", processor.execute(CREATE_USERS));
-            assertEquals("OK", processor.execute(DROP_NAME));
+            assertEquals("OK", processor.executeText("CREATE DATABASE shop"));
+            assertEquals("OK", processor.executeText(CREATE_USERS));
+            assertEquals("OK", processor.executeText(DROP_NAME));
             assertUsersWithoutName(first.catalogManager().getTable("shop", "users").orElseThrow());
             assertTrue(Files.isRegularFile(root.resolve("shop").resolve("users").resolve("catalog.json")));
         } finally {
@@ -49,7 +49,7 @@ class DropColumnRestartTest {
             DefaultQueryProcessor processor = new DefaultQueryProcessor(second);
             assertEquals(
                     "ERROR: column does not exist: name",
-                    processor.execute(DROP_NAME)
+                    processor.executeText(DROP_NAME)
             );
         } finally {
             second.stop();

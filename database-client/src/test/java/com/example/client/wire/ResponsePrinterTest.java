@@ -7,6 +7,7 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ResponsePrinterTest {
@@ -38,5 +39,7 @@ class ResponsePrinterTest {
         assertTrue(output.contains("id"));
         assertTrue(output.contains("alice"));
         assertTrue(output.contains("(1 rows)"));
+        assertEquals(1, output.split("id \\| name", -1).length - 1);
+        assertEquals(1, output.split("\\(1 rows\\)", -1).length - 1);
     }
 }

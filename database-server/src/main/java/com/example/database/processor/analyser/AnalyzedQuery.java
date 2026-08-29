@@ -16,5 +16,8 @@ public sealed interface AnalyzedQuery permits
         AnalyzedBegin,
         AnalyzedCommit,
         AnalyzedRollback,
+        AnalyzedDescribeTable,
+        AnalyzedShowDatabases,
+        AnalyzedShowTables,
         UnresolvedQuery {
 }

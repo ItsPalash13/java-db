@@ -30,7 +30,8 @@ classDiagram
 
     class QueryProcessor {
         <<interface>>
-        +execute(String query) String
+        +execute(String query) QueryResult
+        +executeText(String query) String
     }
 
     class DefaultQueryProcessor {
@@ -40,7 +41,7 @@ classDiagram
         -QueryPlanner planner
         -QueryDispatcher queryDispatcher
         -StorageEngine storageEngine
-        +execute(String query) String
+        +execute(String query) QueryResult
     }
 
     class QueryAnalyser {
@@ -110,6 +111,21 @@ classDiagram
         -String index
     }
 
+    class AnalyzedDescribeTable {
+        <<concrete>>
+        -String database
+        -String table
+    }
+
+    class AnalyzedShowDatabases {
+        <<concrete>>
+    }
+
+    class AnalyzedShowTables {
+        <<concrete>>
+        -String database
+    }
+
     class UnresolvedQuery {
         <<concrete>>
         -AstNode source
@@ -130,6 +146,12 @@ classDiagram
         DROP_COLUMN
         CREATE_INDEX
         DROP_INDEX
+        BEGIN
+        COMMIT
+        ROLLBACK
+        DESCRIBE_TABLE
+        SHOW_DATABASES
+        SHOW_TABLES
         UNRESOLVED
     }
 
@@ -207,9 +229,13 @@ classDiagram
 
     class QueryResult {
         <<concrete>>
-        -String message
         +ok() QueryResult
+        +okEcho(String message) QueryResult
+        +error(String message) QueryResult
+        +resultSet(columns, rows) QueryResult
+        +hasResultSet() boolean
         +toResponse() String
+        +toWireResponse() WireResponse
     }
 
     class ExecutionException {
@@ -228,6 +254,12 @@ classDiagram
         -TransactionManager transactionManager
         -LockManager lockManager
         -WALManager walManager
+        +execute(ExecutionPlan plan) QueryResult
+    }
+
+    class DescribeExecutor {
+        <<concrete>>
+        -CatalogManager catalogManager
         +execute(ExecutionPlan plan) QueryResult
     }
 
@@ -427,6 +459,9 @@ classDiagram
         <<interface>>
         +runExclusiveCatalog(Runnable action)
         +runExclusiveCatalog(Supplier~T~ action) T
+        +lockExclusiveCatalog()
+        +tryLockExclusiveCatalog() boolean
+        +unlockExclusiveCatalog()
     }
 
     class DefaultLockManager {
@@ -434,6 +469,7 @@ classDiagram
         -ReentrantLock catalogLock
         +runExclusiveCatalog(Runnable action)
         +runExclusiveCatalog(Supplier~T~ action) T
+        +lockExclusiveCatalog / tryLockExclusiveCatalog / unlockExclusiveCatalog
     }
 
     class TransactionManager {
@@ -444,6 +480,7 @@ classDiagram
         +beginExplicit(LockManager, CatalogManager)
         +commitExplicit(LockManager, CatalogManager)
         +rollbackExplicit(LockManager, CatalogManager)
+        +endConnectionSession(LockManager, CatalogManager)
         +inExplicitTransaction() boolean
         +currentTxnId() int
     }
@@ -835,6 +872,9 @@ classDiagram
     AnalyzedQuery <|.. AnalyzedDropColumn
     AnalyzedQuery <|.. AnalyzedCreateIndex
     AnalyzedQuery <|.. AnalyzedDropIndex
+    AnalyzedQuery <|.. AnalyzedDescribeTable
+    AnalyzedQuery <|.. AnalyzedShowDatabases
+    AnalyzedQuery <|.. AnalyzedShowTables
     AnalyzedQuery <|.. UnresolvedQuery
     AnalyzedCreateTable --> ColumnMetadata : columns
     AnalyzedAddColumn --> ColumnMetadata : column
@@ -847,6 +887,9 @@ classDiagram
     ExecutionPlan <|.. DropColumnPlan
     ExecutionPlan <|.. CreateIndexPlan
     ExecutionPlan <|.. DropIndexPlan
+    ExecutionPlan <|.. DescribeTablePlan
+    ExecutionPlan <|.. ShowDatabasesPlan
+    ExecutionPlan <|.. ShowTablesPlan
     ExecutionPlan <|.. UnresolvedPlan
     CreateTablePlan --> ColumnMetadata : columns
     CreateTablePlan --> QueryType
@@ -871,7 +914,9 @@ classDiagram
     ExecutorRegistry --> QueryExecutor
     QueryExecutor <|.. CommandExecutor
     QueryExecutor <|.. TransactionControlExecutor
+    QueryExecutor <|.. DescribeExecutor
     CommandExecutor --> CatalogManager : writes
+    DescribeExecutor --> CatalogManager : reads
     CommandExecutor --> TransactionManager : implicit txn / explicit append
     CommandExecutor --> LockManager : runExclusiveCatalog
     CommandExecutor --> WALManager : append (flush at commit)

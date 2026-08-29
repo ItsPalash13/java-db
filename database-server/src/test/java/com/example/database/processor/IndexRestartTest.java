@@ -35,13 +35,13 @@ class IndexRestartTest {
         first.start();
         try {
             DefaultQueryProcessor processor = new DefaultQueryProcessor(first);
-            assertEquals("OK", processor.execute("CREATE DATABASE shop"));
-            assertEquals("OK", processor.execute(CREATE_USERS));
-            assertEquals("OK", processor.execute(CREATE_INDEX));
+            assertEquals("OK", processor.executeText("CREATE DATABASE shop"));
+            assertEquals("OK", processor.executeText(CREATE_USERS));
+            assertEquals("OK", processor.executeText(CREATE_INDEX));
             assertIndex(first.catalogManager().getTable("shop", "users").orElseThrow());
             assertTrue(Files.isRegularFile(root.resolve("shop").resolve("users").resolve("catalog.json")));
 
-            assertEquals("OK", processor.execute(DROP_INDEX));
+            assertEquals("OK", processor.executeText(DROP_INDEX));
             assertTrue(first.catalogManager().getTable("shop", "users").orElseThrow().indexes().isEmpty());
         } finally {
             first.stop();
@@ -53,7 +53,7 @@ class IndexRestartTest {
             assertTrue(second.catalogManager().getTable("shop", "users").orElseThrow().indexes().isEmpty());
 
             DefaultQueryProcessor processor = new DefaultQueryProcessor(second);
-            assertEquals("OK", processor.execute(CREATE_INDEX));
+            assertEquals("OK", processor.executeText(CREATE_INDEX));
             assertIndex(second.catalogManager().getTable("shop", "users").orElseThrow());
         } finally {
             second.stop();

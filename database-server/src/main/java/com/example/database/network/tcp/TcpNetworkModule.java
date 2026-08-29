@@ -102,6 +102,7 @@ public final class TcpNetworkModule implements NetworkModule {
         } catch (IOException ignored) {
             // Peer closed or socket closed during stop().
         } finally {
+            requestHandler.onConnectionClosed();
             closeQuietly(connection);
         }
     }

@@ -9,9 +9,12 @@ import com.example.database.processor.analyser.AnalyzedDropIndex;
 import com.example.database.processor.analyser.AnalyzedCreateTable;
 import com.example.database.processor.analyser.AnalyzedDropDatabase;
 import com.example.database.processor.analyser.AnalyzedDropTable;
+import com.example.database.processor.analyser.AnalyzedDescribeTable;
 import com.example.database.processor.analyser.AnalyzedDropColumn;
 import com.example.database.processor.analyser.AnalyzedQuery;
 import com.example.database.processor.analyser.AnalyzedRollback;
+import com.example.database.processor.analyser.AnalyzedShowDatabases;
+import com.example.database.processor.analyser.AnalyzedShowTables;
 import com.example.database.processor.analyser.UnresolvedQuery;
 
 import java.util.Objects;
@@ -61,6 +64,15 @@ public final class DefaultQueryPlanner implements QueryPlanner {
         }
         if (analyzed instanceof AnalyzedRollback) {
             return new RollbackPlan();
+        }
+        if (analyzed instanceof AnalyzedDescribeTable describe) {
+            return new DescribeTablePlan(describe.database(), describe.table());
+        }
+        if (analyzed instanceof AnalyzedShowDatabases) {
+            return new ShowDatabasesPlan();
+        }
+        if (analyzed instanceof AnalyzedShowTables showTables) {
+            return new ShowTablesPlan(showTables.database());
         }
         if (analyzed instanceof UnresolvedQuery unresolved) {
             return new UnresolvedPlan(unresolved);

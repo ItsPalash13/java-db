@@ -32,8 +32,8 @@ class CreateTableRestartTest {
         first.start();
         try {
             DefaultQueryProcessor processor = new DefaultQueryProcessor(first);
-            assertEquals("OK", processor.execute("CREATE DATABASE shop"));
-            assertEquals("OK", processor.execute(CREATE_USERS));
+            assertEquals("OK", processor.executeText("CREATE DATABASE shop"));
+            assertEquals("OK", processor.executeText(CREATE_USERS));
             assertUsersTable(first.catalogManager().getTable("shop", "users").orElseThrow());
             assertTrue(Files.isRegularFile(root.resolve("shop").resolve("users").resolve("catalog.json")));
         } finally {
@@ -48,7 +48,7 @@ class CreateTableRestartTest {
             DefaultQueryProcessor processor = new DefaultQueryProcessor(second);
             assertEquals(
                     "ERROR: table already exists: shop.users",
-                    processor.execute(CREATE_USERS)
+                    processor.executeText(CREATE_USERS)
             );
             assertUsersTable(second.catalogManager().getTable("shop", "users").orElseThrow());
         } finally {

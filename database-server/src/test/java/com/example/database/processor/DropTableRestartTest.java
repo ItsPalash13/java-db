@@ -32,12 +32,12 @@ class DropTableRestartTest {
         first.start();
         try {
             DefaultQueryProcessor processor = new DefaultQueryProcessor(first);
-            assertEquals("OK", processor.execute("CREATE DATABASE shop"));
-            assertEquals("OK", processor.execute(CREATE_USERS));
+            assertEquals("OK", processor.executeText("CREATE DATABASE shop"));
+            assertEquals("OK", processor.executeText(CREATE_USERS));
             assertTrue(first.catalogManager().tableExists("shop", "users"));
             assertTrue(Files.isRegularFile(root.resolve("shop").resolve("users").resolve("catalog.json")));
 
-            assertEquals("OK", processor.execute(DROP_USERS));
+            assertEquals("OK", processor.executeText(DROP_USERS));
             assertFalse(first.catalogManager().tableExists("shop", "users"));
             assertFalse(Files.isDirectory(root.resolve("shop").resolve("users")));
         } finally {
@@ -55,7 +55,7 @@ class DropTableRestartTest {
             DefaultQueryProcessor processor = new DefaultQueryProcessor(second);
             assertEquals(
                     "ERROR: table does not exist: shop.users",
-                    processor.execute(DROP_USERS)
+                    processor.executeText(DROP_USERS)
             );
         } finally {
             second.stop();

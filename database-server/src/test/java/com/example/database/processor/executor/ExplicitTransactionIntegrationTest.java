@@ -87,10 +87,10 @@ class ExplicitTransactionIntegrationTest {
         DefaultQueryProcessor processor = new DefaultQueryProcessor(engine);
         engine.catalogManager().createDatabase("shop");
 
-        assertEquals("OK", processor.execute("BEGIN"));
-        assertEquals("OK", processor.execute("CREATE TABLE shop.a (id INT)"));
-        assertEquals("OK", processor.execute("CREATE TABLE shop.b (id INT)"));
-        assertEquals("OK", processor.execute("COMMIT"));
+        assertEquals("OK", processor.executeText("BEGIN"));
+        assertEquals("OK", processor.executeText("CREATE TABLE shop.a (id INT)"));
+        assertEquals("OK", processor.executeText("CREATE TABLE shop.b (id INT)"));
+        assertEquals("OK", processor.executeText("COMMIT"));
 
         assertTrue(engine.catalogManager().tableExists("shop", "a"));
         assertTrue(engine.catalogManager().tableExists("shop", "b"));
@@ -104,9 +104,9 @@ class ExplicitTransactionIntegrationTest {
         DefaultQueryProcessor processor = new DefaultQueryProcessor(engine);
         engine.catalogManager().createDatabase("shop");
 
-        assertEquals("OK", processor.execute("BEGIN"));
-        assertEquals("OK", processor.execute("CREATE TABLE shop.a (id INT)"));
-        assertEquals("OK", processor.execute("ROLLBACK"));
+        assertEquals("OK", processor.executeText("BEGIN"));
+        assertEquals("OK", processor.executeText("CREATE TABLE shop.a (id INT)"));
+        assertEquals("OK", processor.executeText("ROLLBACK"));
 
         assertFalse(engine.catalogManager().tableExists("shop", "a"));
         engine.stop();

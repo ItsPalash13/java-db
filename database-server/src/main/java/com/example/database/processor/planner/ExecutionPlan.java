@@ -15,6 +15,9 @@ public sealed interface ExecutionPlan permits
         BeginPlan,
         CommitPlan,
         RollbackPlan,
+        DescribeTablePlan,
+        ShowDatabasesPlan,
+        ShowTablesPlan,
         UnresolvedPlan {
 
     QueryType queryType();

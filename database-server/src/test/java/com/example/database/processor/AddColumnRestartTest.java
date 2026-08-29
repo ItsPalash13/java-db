@@ -33,9 +33,9 @@ class AddColumnRestartTest {
         first.start();
         try {
             DefaultQueryProcessor processor = new DefaultQueryProcessor(first);
-            assertEquals("OK", processor.execute("CREATE DATABASE shop"));
-            assertEquals("OK", processor.execute(CREATE_USERS));
-            assertEquals("OK", processor.execute(ADD_AGE));
+            assertEquals("OK", processor.executeText("CREATE DATABASE shop"));
+            assertEquals("OK", processor.executeText(CREATE_USERS));
+            assertEquals("OK", processor.executeText(ADD_AGE));
             assertUsersWithAge(first.catalogManager().getTable("shop", "users").orElseThrow());
             assertTrue(Files.isRegularFile(root.resolve("shop").resolve("users").resolve("catalog.json")));
         } finally {
@@ -50,7 +50,7 @@ class AddColumnRestartTest {
             DefaultQueryProcessor processor = new DefaultQueryProcessor(second);
             assertEquals(
                     "ERROR: duplicate column name: age",
-                    processor.execute(ADD_AGE)
+                    processor.executeText(ADD_AGE)
             );
         } finally {
             second.stop();
