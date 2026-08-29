@@ -9,6 +9,7 @@ import com.example.database.processor.executor.ExecutionException;
 import com.example.database.processor.executor.ExecutorRegistry;
 import com.example.database.processor.executor.QueryDispatcher;
 import com.example.database.processor.executor.QueryResult;
+import com.example.database.processor.executor.TransactionControlExecutor;
 import com.example.database.processor.lexer.DefaultQueryLexer;
 import com.example.database.processor.lexer.LexException;
 import com.example.database.processor.lexer.QueryLexer;
@@ -122,7 +123,17 @@ public final class DefaultQueryProcessor implements QueryProcessor {
         // and Main constructs this processor before DatabaseServer.start().
         if (queryDispatcher == null) {
             ExecutorRegistry registry = new ExecutorRegistry();
-            CommandExecutor commands = new CommandExecutor(storageEngine.catalogManager());
+            CommandExecutor commands = new CommandExecutor(
+                    storageEngine.catalogManager(),
+                    storageEngine.transactionManager(),
+                    storageEngine.lockManager(),
+                    storageEngine.walManager()
+            );
+            TransactionControlExecutor transactionControl = new TransactionControlExecutor(
+                    storageEngine.transactionManager(),
+                    storageEngine.lockManager(),
+                    storageEngine.catalogManager()
+            );
             registry.register(QueryType.CREATE_TABLE, commands);
             registry.register(QueryType.DROP_TABLE, commands);
             registry.register(QueryType.CREATE_DATABASE, commands);
@@ -131,6 +142,9 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             registry.register(QueryType.DROP_COLUMN, commands);
             registry.register(QueryType.CREATE_INDEX, commands);
             registry.register(QueryType.DROP_INDEX, commands);
+            registry.register(QueryType.BEGIN, transactionControl);
+            registry.register(QueryType.COMMIT, transactionControl);
+            registry.register(QueryType.ROLLBACK, transactionControl);
             queryDispatcher = new QueryDispatcher(registry);
         }
         return queryDispatcher;

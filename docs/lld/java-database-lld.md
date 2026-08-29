@@ -225,6 +225,9 @@ classDiagram
     class CommandExecutor {
         <<concrete>>
         -CatalogManager catalogManager
+        -TransactionManager transactionManager
+        -LockManager lockManager
+        -WALManager walManager
         +execute(ExecutionPlan plan) QueryResult
     }
 
@@ -246,6 +249,9 @@ classDiagram
         +stop()
         +dataDirectory() DataDirectory
         +catalogManager() CatalogManager
+        +transactionManager() TransactionManager
+        +lockManager() LockManager
+        +walManager() WALManager
     }
 
     class DefaultStorageEngine {
@@ -253,10 +259,16 @@ classDiagram
         -DataDirectory dataDirectory
         -PhysicalStorage physicalStorage
         -DefaultCatalogManager catalogManager
+        -WALManager walManager
+        -TransactionManager transactionManager
+        -LockManager lockManager
         +start()
         +stop()
         +dataDirectory() DataDirectory
         +catalogManager() CatalogManager
+        +transactionManager() TransactionManager
+        +lockManager() LockManager
+        +walManager() WALManager
     }
 
     class DataDirectory {
@@ -413,14 +425,80 @@ classDiagram
 
     class LockManager {
         <<interface>>
+        +runExclusiveCatalog(Runnable action)
+        +runExclusiveCatalog(Supplier~T~ action) T
+    }
+
+    class DefaultLockManager {
+        <<concrete>>
+        -ReentrantLock catalogLock
+        +runExclusiveCatalog(Runnable action)
+        +runExclusiveCatalog(Supplier~T~ action) T
     }
 
     class TransactionManager {
         <<interface>>
+        +runInTransaction(Runnable action)
+        +runInTransaction(Supplier~T~ action) T
+        +seedNextTxnId(int nextTxnId)
+        +beginExplicit(LockManager, CatalogManager)
+        +commitExplicit(LockManager, CatalogManager)
+        +rollbackExplicit(LockManager, CatalogManager)
+        +inExplicitTransaction() boolean
+        +currentTxnId() int
+    }
+
+    class DefaultTransactionManager {
+        <<concrete>>
+        -WALManager walManager
+        -AtomicInteger nextTxnId
+        -ThreadLocal~TransactionContext~ context
+        +runInTransaction(Runnable action)
+        +runInTransaction(Supplier~T~ action) T
+        +beginExplicit / commitExplicit / rollbackExplicit
+    }
+
+    class TransactionControlExecutor {
+        <<concrete>>
+        +execute(ExecutionPlan plan) QueryResult
     }
 
     class WALManager {
         <<interface>>
+        +append(WalRecord record)
+        +flush()
+        +discardPending()
+        +replay(CatalogManager catalogManager) int
+    }
+
+    class DefaultWALManager {
+        <<concrete>>
+        -PhysicalStorage physicalStorage
+        +append(WalRecord record)
+        +flush()
+        +discardPending()
+        +replay(CatalogManager catalogManager) int
+    }
+
+    class WalRecord {
+        <<concrete>>
+        -WalOp op
+        -Integer txnId
+        +commit(int txnId) WalRecord
+        +createTable(int txnId, String, String, List) WalRecord
+    }
+
+    class WalOp {
+        <<enumeration>>
+        CREATE_DATABASE
+        DROP_DATABASE
+        CREATE_TABLE
+        DROP_TABLE
+        ADD_COLUMN
+        DROP_COLUMN
+        CREATE_INDEX
+        DROP_INDEX
+        COMMIT
     }
 
     class BufferPool {
@@ -792,7 +870,23 @@ classDiagram
     QueryDispatcher --> ExecutorRegistry
     ExecutorRegistry --> QueryExecutor
     QueryExecutor <|.. CommandExecutor
+    QueryExecutor <|.. TransactionControlExecutor
     CommandExecutor --> CatalogManager : writes
+    CommandExecutor --> TransactionManager : implicit txn / explicit append
+    CommandExecutor --> LockManager : runExclusiveCatalog
+    CommandExecutor --> WALManager : append (flush at commit)
+    TransactionControlExecutor --> TransactionManager : begin/commit/rollback
+    TransactionManager <|.. DefaultTransactionManager
+    DefaultTransactionManager --> WALManager : flush COMMIT / discard
+    LockManager <|.. DefaultLockManager
+    WALManager <|.. DefaultWALManager
+    DefaultWALManager --> PhysicalStorage : wal.log
+    DefaultWALManager --> PhysicalStorage : replay/replay-*.log
+    DefaultWALManager ..> CatalogManager : replay
+    WalRecord --> WalOp
+    DefaultStorageEngine --> TransactionManager : owns
+    DefaultStorageEngine --> LockManager : owns
+    DefaultStorageEngine --> WALManager : owns
     CommandExecutor ..> CreateTablePlan
     CommandExecutor ..> CreateDatabasePlan
     CommandExecutor ..> DropTablePlan
@@ -803,9 +897,6 @@ classDiagram
     CommandExecutor ..> DropIndexPlan
     StorageEngine --> TableStore : owns
     StorageEngine --> IndexStore : owns
-    StorageEngine --> LockManager : owns
-    StorageEngine --> TransactionManager : owns
-    StorageEngine --> WALManager : owns
     StorageEngine --> BufferPool : owns
     DefaultQueryParser --> ParserRegistry
     ParserRegistry --> Parser

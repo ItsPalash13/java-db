@@ -17,8 +17,16 @@ import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.ColumnType;
 import com.example.database.storage.catalog.DefaultCatalogManager;
 import com.example.database.storage.catalog.TableMetadata;
+import com.example.database.storage.lock.DefaultLockManager;
+import com.example.database.storage.physical.DefaultPhysicalStorage;
+import com.example.database.storage.transaction.DefaultTransactionManager;
+import com.example.database.storage.wal.DefaultWALManager;
+import com.example.database.storage.wal.WALManager;
+import com.example.database.storage.DataDirectory;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -28,10 +36,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CommandExecutorTest {
 
+    @TempDir
+    Path tempDir;
+
     @Test
     void createTableWritesCatalogWithoutIdsOnThePlan() {
         CatalogManager catalog = catalogWithShop();
-        CommandExecutor executor = new CommandExecutor(catalog);
+        CommandExecutor executor = newExecutor(catalog);
         List<ColumnMetadata> columns = List.of(
                 ColumnMetadata.define("id", ColumnType.INT),
                 ColumnMetadata.define("name", ColumnType.VARCHAR)
@@ -57,7 +68,7 @@ class CommandExecutorTest {
                 "users",
                 List.of(ColumnMetadata.define("id", ColumnType.INT))
         ));
-        CommandExecutor executor = new CommandExecutor(catalog);
+        CommandExecutor executor = newExecutor(catalog);
 
         ExecutionException ex = assertThrows(
                 ExecutionException.class,
@@ -80,7 +91,7 @@ class CommandExecutorTest {
                 "users",
                 List.of(ColumnMetadata.define("id", ColumnType.INT))
         ));
-        CommandExecutor executor = new CommandExecutor(catalog);
+        CommandExecutor executor = newExecutor(catalog);
 
         assertEquals("OK", executor.execute(new DropTablePlan("shop", "users")).toResponse());
         assertFalse(catalog.tableExists("shop", "users"));
@@ -97,7 +108,7 @@ class CommandExecutorTest {
                         ColumnMetadata.define("name", ColumnType.VARCHAR)
                 )
         ));
-        CommandExecutor executor = new CommandExecutor(catalog);
+        CommandExecutor executor = newExecutor(catalog);
 
         assertEquals(
                 "OK",
@@ -128,7 +139,7 @@ class CommandExecutorTest {
                         ColumnMetadata.define("name", ColumnType.VARCHAR)
                 )
         ));
-        CommandExecutor executor = new CommandExecutor(catalog);
+        CommandExecutor executor = newExecutor(catalog);
 
         assertEquals(
                 "OK",
@@ -152,7 +163,7 @@ class CommandExecutorTest {
                         ColumnMetadata.define("name", ColumnType.VARCHAR)
                 )
         ));
-        CommandExecutor executor = new CommandExecutor(catalog);
+        CommandExecutor executor = newExecutor(catalog);
 
         assertEquals(
                 "OK",
@@ -172,7 +183,7 @@ class CommandExecutorTest {
     @Test
     void rejectsUnresolvedPlans() {
         CatalogManager catalog = new DefaultCatalogManager();
-        CommandExecutor executor = new CommandExecutor(catalog);
+        CommandExecutor executor = newExecutor(catalog);
         UnresolvedPlan plan = new UnresolvedPlan(
                 new UnresolvedQuery(new SelectQuery(true, List.of(), new QualifiedTable("shop", "users"), null))
         );
@@ -188,7 +199,7 @@ class CommandExecutorTest {
     @Test
     void createAndDropDatabaseUpdateCatalog() {
         CatalogManager catalog = new DefaultCatalogManager();
-        CommandExecutor executor = new CommandExecutor(catalog);
+        CommandExecutor executor = newExecutor(catalog);
 
         assertEquals("OK", executor.execute(new CreateDatabasePlan("shop")).toResponse());
         assertTrue(catalog.databaseExists("shop"));
@@ -201,5 +212,15 @@ class CommandExecutorTest {
         CatalogManager catalog = new DefaultCatalogManager();
         catalog.createDatabase("shop");
         return catalog;
+    }
+
+    private CommandExecutor newExecutor(CatalogManager catalog) {
+        WALManager wal = new DefaultWALManager(new DefaultPhysicalStorage(new DataDirectory(tempDir)));
+        return new CommandExecutor(
+                catalog,
+                new DefaultTransactionManager(wal),
+                new DefaultLockManager(),
+                wal
+        );
     }
 }

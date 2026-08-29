@@ -1,8 +1,10 @@
 # Work plan — finish Phase 1 DDL, then concurrency
 
-Snapshot of where the project stands relative to `DDL-Phase-1.md`, what to build next, and when to harden concurrency.
+Snapshot of where the project stood for Phase 1 DDL and quick concurrency fixes.
 
-Phase 2 (`LockManager`, `TransactionManager`, `WALManager`, DML row storage) stays **after** this plan.
+**Phase 1 DDL is complete.** For TransactionManager / LockManager / WAL / explicit `BEGIN`/`COMMIT`, use **`Phase-2-transaction-lock-wal-plan.md`**.
+
+Phase 2 (`LockManager`, `TransactionManager`, `WALManager`, DML row storage) is planned in that doc.
 
 ---
 
@@ -147,6 +149,8 @@ Not part of this plan’s immediate work:
 
 | Doc | Purpose |
 |-----|---------|
+| `Phase-2-transaction-lock-wal-plan.md` | **Current** — txn → lock → WAL → BEGIN/COMMIT |
+| `DDL-WAL-transactions.md` | Background: real DBs, replay, roles |
 | `DDL-Phase-1.md` | Original sub-phase map (1.1–1.11) |
 | `DDL_phases.md` | Phase 1 vs Phase 2 boundary |
 | `Alter-Column.md` | ADD COLUMN rules |

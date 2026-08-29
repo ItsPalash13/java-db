@@ -13,5 +13,8 @@ public sealed interface AnalyzedQuery permits
         AnalyzedDropColumn,
         AnalyzedCreateIndex,
         AnalyzedDropIndex,
+        AnalyzedBegin,
+        AnalyzedCommit,
+        AnalyzedRollback,
         UnresolvedQuery {
 }

@@ -22,10 +22,11 @@ public final class DefaultCatalogManager implements CatalogManager {
     private final Map<String, Map<String, TableMetadata>> tablesByDatabase = new LinkedHashMap<>();
     private final Set<String> databaseNames = new LinkedHashSet<>();
     private final CatalogStore catalogStore;
-    // Plain int on purpose. AtomicInteger would only make the counter race-free;
-    // createTable also mutates the map and rewrites a catalog file. Concurrent DDL
-    // is LockManager / Phase 2, which should lock the whole operation.
+    // Plain int on purpose. Catalog exclusive LockManager serializes DDL that
+    // mutates this counter together with the maps and catalog file write.
     private int nextTableId = 1;
+    // Explicit BEGIN sessions defer catalog.json writes until COMMIT on this thread.
+    private final ThreadLocal<Boolean> deferPersist = ThreadLocal.withInitial(() -> false);
 
     public DefaultCatalogManager() {
         this.catalogStore = null;
@@ -335,6 +336,73 @@ public final class DefaultCatalogManager implements CatalogManager {
         replaceAll(catalogStore.load());
     }
 
+    @Override
+    public void setDeferPersist(boolean defer) {
+        deferPersist.set(defer);
+    }
+
+    @Override
+    public CatalogSnapshot snapshot() {
+        return new CatalogSnapshot(tablesByDatabase, databaseNames, nextTableId);
+    }
+
+    @Override
+    public void restoreSnapshot(CatalogSnapshot snapshot) {
+        Objects.requireNonNull(snapshot, "snapshot");
+        tablesByDatabase.clear();
+        tablesByDatabase.putAll(deepCopyTables(snapshot.tablesByDatabase()));
+        databaseNames.clear();
+        databaseNames.addAll(snapshot.databaseNames());
+        nextTableId = snapshot.nextTableId();
+    }
+
+    @Override
+    public void persistChangesSince(CatalogSnapshot before) {
+        Objects.requireNonNull(before, "before");
+        if (catalogStore == null) {
+            return;
+        }
+        for (String database : databaseNames) {
+            if (!before.databaseNames().contains(database)) {
+                persistCreateDatabase(database);
+            }
+        }
+        for (String database : before.databaseNames()) {
+            if (!databaseNames.contains(database)) {
+                persistDropDatabase(database);
+            }
+        }
+        for (TableMetadata table : allTables()) {
+            TableMetadata previous = findInSnapshot(before, table.database(), table.name());
+            if (previous == null || !previous.equals(table)) {
+                persistSaveTable(table);
+            }
+        }
+        for (TableMetadata table : before.allTables()) {
+            if (!tableExists(table.database(), table.name())) {
+                persistDropTable(table.database(), table.name());
+            }
+        }
+    }
+
+    private static TableMetadata findInSnapshot(CatalogSnapshot snapshot, String database, String table) {
+        Map<String, TableMetadata> tables = snapshot.tablesByDatabase().get(database);
+        if (tables == null) {
+            return null;
+        }
+        return tables.get(table);
+    }
+
+    private static Map<String, Map<String, TableMetadata>> deepCopyTables(
+            Map<String, Map<String, TableMetadata>> source
+    ) {
+        Map<String, Map<String, TableMetadata>> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, Map<String, TableMetadata>> entry : source.entrySet()) {
+            copy.put(entry.getKey(), new LinkedHashMap<>(entry.getValue()));
+        }
+        return copy;
+    }
+
     void replaceAll(List<TableMetadata> tables) {
         Objects.requireNonNull(tables, "tables");
         tablesByDatabase.clear();
@@ -369,28 +437,28 @@ public final class DefaultCatalogManager implements CatalogManager {
     }
 
     private void persistSaveTable(TableMetadata table) {
-        if (catalogStore == null) {
+        if (catalogStore == null || deferPersist.get()) {
             return;
         }
         catalogStore.saveTable(table);
     }
 
     private void persistDropTable(String database, String table) {
-        if (catalogStore == null) {
+        if (catalogStore == null || deferPersist.get()) {
             return;
         }
         catalogStore.dropTable(database, table);
     }
 
     private void persistCreateDatabase(String name) {
-        if (catalogStore == null) {
+        if (catalogStore == null || deferPersist.get()) {
             return;
         }
         catalogStore.createDatabase(name);
     }
 
     private void persistDropDatabase(String name) {
-        if (catalogStore == null) {
+        if (catalogStore == null || deferPersist.get()) {
             return;
         }
         catalogStore.dropDatabase(name);

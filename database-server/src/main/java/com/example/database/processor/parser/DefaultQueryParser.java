@@ -4,10 +4,13 @@ import com.example.database.processor.lexer.Token;
 import com.example.database.processor.lexer.TokenCatalog;
 import com.example.database.processor.parser.ast.AstNode;
 import com.example.database.processor.parser.statement.AlterParser;
+import com.example.database.processor.parser.statement.BeginParser;
+import com.example.database.processor.parser.statement.CommitParser;
 import com.example.database.processor.parser.statement.CreateParser;
 import com.example.database.processor.parser.statement.DeleteParser;
 import com.example.database.processor.parser.statement.DropParser;
 import com.example.database.processor.parser.statement.InsertParser;
+import com.example.database.processor.parser.statement.RollbackParser;
 import com.example.database.processor.parser.statement.SelectParser;
 import com.example.database.processor.parser.statement.UpdateParser;
 
@@ -30,6 +33,9 @@ public final class DefaultQueryParser implements QueryParser {
         registry.register(TokenCatalog.UPDATE, new UpdateParser());
         registry.register(TokenCatalog.INSERT, new InsertParser());
         registry.register(TokenCatalog.DELETE, new DeleteParser());
+        registry.register(TokenCatalog.BEGIN, new BeginParser());
+        registry.register(TokenCatalog.COMMIT, new CommitParser());
+        registry.register(TokenCatalog.ROLLBACK, new RollbackParser());
     }
 
     @Override

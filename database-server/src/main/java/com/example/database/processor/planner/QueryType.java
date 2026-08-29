@@ -13,5 +13,8 @@ public enum QueryType {
     DROP_COLUMN,
     CREATE_INDEX,
     DROP_INDEX,
+    BEGIN,
+    COMMIT,
+    ROLLBACK,
     UNRESOLVED
 }

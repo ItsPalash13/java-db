@@ -84,4 +84,22 @@ public interface CatalogManager {
      * Called from {@code StorageEngine.start()}, not from SQL.
      */
     void load();
+
+    /**
+     * When true, catalog mutations update memory only until {@link #persistChangesSince}.
+     * Used for explicit multi-statement transactions.
+     */
+    void setDeferPersist(boolean defer);
+
+    /** Captures in-memory catalog state for rollback of an explicit transaction. */
+    CatalogSnapshot snapshot();
+
+    /** Restores memory from a snapshot; does not touch on-disk catalog files. */
+    void restoreSnapshot(CatalogSnapshot snapshot);
+
+    /**
+     * Writes catalog file changes made since {@code before} was taken.
+     * No-op when there is no backing {@link CatalogStore}.
+     */
+    void persistChangesSince(CatalogSnapshot before);
 }

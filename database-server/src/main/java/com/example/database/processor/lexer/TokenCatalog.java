@@ -24,6 +24,11 @@ public enum TokenCatalog {
     VALUES,
     WHERE,
 
+    BEGIN,
+    COMMIT,
+    ROLLBACK,
+    TRANSACTION,
+
     // column types (CREATE TABLE)
     INT,
     VARCHAR,

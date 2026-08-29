@@ -5,12 +5,15 @@ import com.example.database.processor.parser.ast.ColumnDefinition;
 import com.example.database.processor.parser.ast.ColumnSqlType;
 import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.query.AlterTableQuery;
+import com.example.database.processor.parser.ast.query.BeginQuery;
+import com.example.database.processor.parser.ast.query.CommitQuery;
 import com.example.database.processor.parser.ast.query.CreateDatabaseQuery;
 import com.example.database.processor.parser.ast.query.CreateIndexQuery;
 import com.example.database.processor.parser.ast.query.CreateTableQuery;
 import com.example.database.processor.parser.ast.query.DropDatabaseQuery;
 import com.example.database.processor.parser.ast.query.DropIndexQuery;
 import com.example.database.processor.parser.ast.query.DropTableQuery;
+import com.example.database.processor.parser.ast.query.RollbackQuery;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.ColumnType;
@@ -58,6 +61,15 @@ public final class DefaultQueryAnalyser implements QueryAnalyser {
         }
         if (ast instanceof DropIndexQuery dropIndex) {
             return analyseDropIndex(dropIndex);
+        }
+        if (ast instanceof BeginQuery) {
+            return new AnalyzedBegin();
+        }
+        if (ast instanceof CommitQuery) {
+            return new AnalyzedCommit();
+        }
+        if (ast instanceof RollbackQuery) {
+            return new AnalyzedRollback();
         }
         return new UnresolvedQuery(ast);
     }

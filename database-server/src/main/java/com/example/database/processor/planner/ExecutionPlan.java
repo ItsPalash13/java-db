@@ -12,6 +12,9 @@ public sealed interface ExecutionPlan permits
         DropColumnPlan,
         CreateIndexPlan,
         DropIndexPlan,
+        BeginPlan,
+        CommitPlan,
+        RollbackPlan,
         UnresolvedPlan {
 
     QueryType queryType();
