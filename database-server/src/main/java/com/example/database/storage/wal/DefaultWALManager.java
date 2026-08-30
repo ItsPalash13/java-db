@@ -19,10 +19,21 @@ import java.util.Objects;
 /**
  * Append-only {@code wal.log} under the store root. Pending records are per-thread until
  * {@link #flush()} so rollback can discard work that never became durable.
+ * <p>
+ * Recovery pair: {@link #replay} redoes committed intent missing from catalog after the
+ * last {@code CHECKPOINT} fence; {@link #checkpoint} updates {@code wal.checkpoint} and
+ * <strong>appends</strong> a CHECKPOINT line — the log is never rewritten or truncated.
+ * Checkpoint is not a buffer-pool flush — we have no dirty pages yet.
  */
 public final class DefaultWALManager implements WALManager {
 
-    static final String WAL_FILE = "wal.log";
+    /** Redo stream: JSON lines with DDL + COMMIT + CHECKPOINT. Append-only — never truncated. */
+    public static final String WAL_FILE = "wal.log";
+    /**
+     * Side-file recovery cursor ({@code maxTxnId}). Complements the CHECKPOINT line in
+     * {@code wal.log}; updated in place because it is metadata, not the append-only redo stream.
+     */
+    public static final String CHECKPOINT_FILE = "wal.checkpoint";
 
     private final PhysicalStorage physicalStorage;
     // Unflushed records for the current transaction on this thread.
@@ -70,12 +81,15 @@ public final class DefaultWALManager implements WALManager {
     public int replay(CatalogManager catalogManager) {
         Objects.requireNonNull(catalogManager, "catalogManager");
         ZonedDateTime startedAt = ZonedDateTime.now();
+        // Start from checkpoint so a truncated wal.log still advances nextTxnId correctly.
+        // Without this, every restart after checkpoint would reuse txnId 1 and collide in the log.
+        int maxTxnId = readCheckpointMaxTxnId();
         if (!physicalStorage.exists(WAL_FILE)) {
             WalReplayLogWriter.writeEmpty(
                     physicalStorage,
                     "WAL replay at " + startedAt + "\nwal.log: absent\nFIXED: (none)"
             );
-            return 0;
+            return maxTxnId;
         }
         byte[] bytes;
         try {
@@ -88,14 +102,31 @@ public final class DefaultWALManager implements WALManager {
                     physicalStorage,
                     "WAL replay at " + startedAt + "\nwal.log: empty\nFIXED: (none)"
             );
-            return 0;
+            return maxTxnId;
         }
         WalReplayReport report = new WalReplayReport();
         String text = new String(bytes, StandardCharsets.UTF_8);
-        int maxTxnId = 0;
+        String[] lines = text.split("\n", -1);
+        // Last CHECKPOINT is the recovery fence: catalog was durable through that point, so
+        // older redo stays on disk (append-only history) but is not applied again.
+        int applyFrom = 0;
+        for (int i = 0; i < lines.length; i++) {
+            if (lines[i].isBlank()) {
+                continue;
+            }
+            WalRecord probe = WalJson.fromLine(lines[i]);
+            if (probe.op() == WalOp.CHECKPOINT) {
+                applyFrom = i + 1;
+                if (probe.txnId() != null) {
+                    maxTxnId = Math.max(maxTxnId, probe.txnId());
+                }
+            }
+        }
         int walLines = 0;
+        // Buffer DDL until COMMIT: uncommitted groups must not mutate catalog on recovery.
         Map<Integer, List<WalRecord>> bufferedByTxn = new HashMap<>();
-        for (String line : text.split("\n", -1)) {
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
             if (line.isBlank()) {
                 continue;
             }
@@ -103,6 +134,14 @@ public final class DefaultWALManager implements WALManager {
             WalRecord record = WalJson.fromLine(line);
             if (record.txnId() != null) {
                 maxTxnId = Math.max(maxTxnId, record.txnId());
+            }
+            if (i < applyFrom) {
+                // Before last checkpoint — audit only; catalog already has these effects.
+                continue;
+            }
+            if (record.op() == WalOp.CHECKPOINT) {
+                // Barrier only — prior DDL already durable in catalog; do not buffer or apply.
+                continue;
             }
             if (record.op() == WalOp.COMMIT) {
                 Integer txnId = record.txnId();
@@ -135,6 +174,90 @@ public final class DefaultWALManager implements WALManager {
         report.setUncommittedTxnGroups(uncommitted);
         WalReplayLogWriter.write(physicalStorage, report);
         return maxTxnId;
+    }
+
+    /**
+     * Durable-only checkpoint: catalog files are assumed already consistent with every
+     * committed op up through the current high-water mark. Callers must hold the exclusive
+     * catalog lock so we never race the WAL COMMIT flush → {@code persistChangesSince} gap.
+     * <p>
+     * {@code wal.log} is append-only forever: once a byte is written it is never rewritten
+     * or truncated. Checkpoint only:
+     * <ol>
+     *   <li>Updates {@code wal.checkpoint} (side-file cursor + maxTxnId)</li>
+     *   <li>Appends a {@link WalOp#CHECKPOINT} line to {@code wal.log}</li>
+     * </ol>
+     * Replay uses the last CHECKPOINT as the recovery start fence (older lines stay on disk
+     * for audit; they are not re-applied).
+     */
+    @Override
+    public int checkpoint() {
+        // Merge prior barrier with current log so repeated checkpoints never regress maxTxnId.
+        int maxTxnId = Math.max(readCheckpointMaxTxnId(), scanWalMaxTxnId());
+        try {
+            byte[] metaBytes = WalCheckpointJson.toBytes(new WalCheckpointMeta(maxTxnId));
+            if (!physicalStorage.exists(CHECKPOINT_FILE)) {
+                // PhysicalStorage.write requires create-first; we never invent files in write().
+                physicalStorage.create(CHECKPOINT_FILE);
+            }
+            physicalStorage.write(CHECKPOINT_FILE, metaBytes);
+            // force(true) equivalent: write() alone can sit in the OS cache; barrier must survive crash.
+            physicalStorage.flush(CHECKPOINT_FILE);
+            // Append-only: never replace or empty wal.log — only add a barrier line at EOF.
+            ensureWalFile();
+            appendLine(WalJson.toLine(WalRecord.checkpoint(maxTxnId)));
+            physicalStorage.flush(WAL_FILE);
+            return maxTxnId;
+        } catch (PhysicalStorageException e) {
+            throw new WalException("failed to checkpoint WAL", e);
+        }
+    }
+
+    private int readCheckpointMaxTxnId() {
+        if (!physicalStorage.exists(CHECKPOINT_FILE)) {
+            return 0;
+        }
+        try {
+            byte[] bytes = physicalStorage.read(CHECKPOINT_FILE);
+            // Empty or whitespace-only: treat like missing. create() can leave a 0-byte file,
+            // or a crash mid-write can leave junk that trims to nothing — must not block start().
+            if (bytes.length == 0 || new String(bytes, StandardCharsets.UTF_8).trim().isEmpty()) {
+                return 0;
+            }
+            return WalCheckpointJson.fromBytes(bytes).maxTxnId();
+        } catch (PhysicalStorageException e) {
+            throw new WalException("failed to read wal.checkpoint", e);
+        }
+    }
+
+    /**
+     * Highest txnId still present in the redo file. Used only to populate the barrier;
+     * we do not apply records here — that is {@link #replay}'s job on startup.
+     */
+    private int scanWalMaxTxnId() {
+        if (!physicalStorage.exists(WAL_FILE)) {
+            return 0;
+        }
+        try {
+            byte[] bytes = physicalStorage.read(WAL_FILE);
+            if (bytes.length == 0) {
+                return 0;
+            }
+            int maxTxnId = 0;
+            String text = new String(bytes, StandardCharsets.UTF_8);
+            for (String line : text.split("\n", -1)) {
+                if (line.isBlank()) {
+                    continue;
+                }
+                WalRecord record = WalJson.fromLine(line);
+                if (record.txnId() != null) {
+                    maxTxnId = Math.max(maxTxnId, record.txnId());
+                }
+            }
+            return maxTxnId;
+        } catch (PhysicalStorageException e) {
+            throw new WalException("failed to scan WAL for checkpoint", e);
+        }
     }
 
     private void ensureWalFile() {
@@ -258,6 +381,9 @@ public final class DefaultWALManager implements WALManager {
                 }
                 case COMMIT -> {
                     // Handled in replay scan — not applied to catalog.
+                }
+                case CHECKPOINT -> {
+                    // Barrier marker only — handled in replay scan; never mutates catalog.
                 }
             }
         } catch (CatalogException e) {

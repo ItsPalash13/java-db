@@ -150,6 +150,7 @@ classDiagram
         BEGIN
         COMMIT
         ROLLBACK
+        CHECKPOINT
         DESCRIBE_TABLE
         SHOW_DATABASES
         SHOW_TABLES
@@ -295,6 +296,8 @@ classDiagram
         -WALManager walManager
         -TransactionManager transactionManager
         -LockManager lockManager
+        -CheckpointScheduler checkpointScheduler
+        -boolean checkpointEnabled
         +start()
         +stop()
         +dataDirectory() DataDirectory
@@ -505,12 +508,23 @@ classDiagram
         +execute(ExecutionPlan plan) QueryResult
     }
 
+    class CheckpointExecutor {
+        <<concrete>>
+        +execute(ExecutionPlan plan) QueryResult
+    }
+
+    class CheckpointPlan {
+        <<concrete>>
+        +queryType() QueryType
+    }
+
     class WALManager {
         <<interface>>
         +append(WalRecord record)
         +flush()
         +discardPending()
         +replay(CatalogManager catalogManager) int
+        +checkpoint() int
     }
 
     class DefaultWALManager {
@@ -520,6 +534,45 @@ classDiagram
         +flush()
         +discardPending()
         +replay(CatalogManager catalogManager) int
+        +checkpoint() int
+    }
+
+    class WalCheckpointMeta {
+        <<concrete>>
+        -int maxTxnId
+    }
+
+    class CheckpointStrategy {
+        <<interface>>
+        +awaitTrigger()
+    }
+
+    class CheckpointStrategyKind {
+        <<enumeration>>
+        TIMEOUT
+        WAL_SIZE
+    }
+
+    class TimeoutCheckpointStrategy {
+        <<concrete>>
+        -Duration timeout
+        +awaitTrigger()
+    }
+
+    class WalSizeCheckpointStrategy {
+        <<concrete>>
+        -PhysicalStorage physicalStorage
+        -long maxWalSizeBytes
+        +awaitTrigger()
+    }
+
+    class CheckpointScheduler {
+        <<concrete>>
+        -CheckpointStrategy strategy
+        -LockManager lockManager
+        -WALManager walManager
+        +start()
+        +stop()
     }
 
     class WalRecord {
@@ -541,6 +594,7 @@ classDiagram
         CREATE_INDEX
         DROP_INDEX
         COMMIT
+        CHECKPOINT
     }
 
     class BufferPool {
@@ -559,6 +613,9 @@ classDiagram
         +load(DataDirectory dataDirectory) ServerEnvironment
         +defaults() ServerEnvironment
         +catalogLockWait() Duration
+        +checkpointEnabled() boolean
+        +checkpointStrategyKind() CheckpointStrategyKind
+        +createCheckpointStrategy(PhysicalStorage) CheckpointStrategy
     }
 
     class QueryLexer {
@@ -926,6 +983,7 @@ classDiagram
     ExecutorRegistry --> QueryExecutor
     QueryExecutor <|.. CommandExecutor
     QueryExecutor <|.. TransactionControlExecutor
+    QueryExecutor <|.. CheckpointExecutor
     QueryExecutor <|.. DescribeExecutor
     CommandExecutor --> CatalogManager : writes
     DescribeExecutor --> CatalogManager : reads
@@ -933,17 +991,30 @@ classDiagram
     CommandExecutor --> LockManager : runExclusiveCatalog
     CommandExecutor --> WALManager : append (flush at commit)
     TransactionControlExecutor --> TransactionManager : begin/commit/rollback
+    CheckpointExecutor --> LockManager : runExclusiveCatalog
+    CheckpointExecutor --> WALManager : checkpoint
+    CheckpointExecutor --> TransactionManager : reject if explicit
     TransactionManager <|.. DefaultTransactionManager
     DefaultTransactionManager --> WALManager : flush COMMIT / discard
     LockManager <|.. DefaultLockManager
     WALManager <|.. DefaultWALManager
     DefaultWALManager --> PhysicalStorage : wal.log
+    DefaultWALManager --> PhysicalStorage : wal.checkpoint
     DefaultWALManager --> PhysicalStorage : replay/replay-*.log
     DefaultWALManager ..> CatalogManager : replay
+    CheckpointStrategy <|.. TimeoutCheckpointStrategy
+    CheckpointStrategy <|.. WalSizeCheckpointStrategy
+    CheckpointScheduler --> CheckpointStrategy
+    CheckpointScheduler --> LockManager
+    CheckpointScheduler --> WALManager : checkpoint
+    ServerEnvironment ..> CheckpointStrategy : createCheckpointStrategy
     WalRecord --> WalOp
     DefaultStorageEngine --> TransactionManager : owns
     DefaultStorageEngine --> LockManager : owns
     DefaultStorageEngine --> WALManager : owns
+    DefaultStorageEngine --> CheckpointScheduler : owns
+    ExecutionPlan <|.. CheckpointPlan
+    CheckpointExecutor ..> CheckpointPlan
     CommandExecutor ..> CreateTablePlan
     CommandExecutor ..> CreateDatabasePlan
     CommandExecutor ..> DropTablePlan

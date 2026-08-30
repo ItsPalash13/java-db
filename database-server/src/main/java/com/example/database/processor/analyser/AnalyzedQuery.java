@@ -16,6 +16,7 @@ public sealed interface AnalyzedQuery permits
         AnalyzedBegin,
         AnalyzedCommit,
         AnalyzedRollback,
+        AnalyzedCheckpoint,
         AnalyzedDescribeTable,
         AnalyzedShowDatabases,
         AnalyzedShowTables,

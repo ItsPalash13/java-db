@@ -14,5 +14,11 @@ public enum WalOp {
     CREATE_INDEX,
     DROP_INDEX,
     /** Marks a transaction committed; replay applies buffered DDL for this {@code txnId}. */
-    COMMIT
+    COMMIT,
+    /**
+     * Recovery barrier appended to {@code wal.log} after checkpoint. Not catalog redo —
+     * {@code txnId} carries the durable high-water mark. History before this line stays
+     * on disk; replay skips applying it.
+     */
+    CHECKPOINT
 }

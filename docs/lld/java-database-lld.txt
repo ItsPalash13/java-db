@@ -136,7 +136,7 @@ AnalysisException
 
 <<enumeration>>
 QueryType
-CREATE_TABLE, DROP_TABLE, CREATE_DATABASE, DROP_DATABASE, ADD_COLUMN, DROP_COLUMN, CREATE_INDEX, DROP_INDEX, BEGIN, COMMIT, ROLLBACK, DESCRIBE_TABLE, SHOW_DATABASES, SHOW_TABLES, UNRESOLVED
+CREATE_TABLE, DROP_TABLE, CREATE_DATABASE, DROP_DATABASE, ADD_COLUMN, DROP_COLUMN, CREATE_INDEX, DROP_INDEX, BEGIN, COMMIT, ROLLBACK, CHECKPOINT, DESCRIBE_TABLE, SHOW_DATABASES, SHOW_TABLES, UNRESOLVED
 
 
 <<interface>>
@@ -268,6 +268,16 @@ TransactionControlExecutor
 
 
 <<concrete>>
+CheckpointExecutor
+- lockManager: LockManager
+- walManager: WALManager
+- transactionManager: TransactionManager
++ execute(plan: ExecutionPlan): QueryResult
+    // CHECKPOINT SQL → exclusive catalog → WALManager.checkpoint()
+    // refused inside explicit BEGIN (deferred catalog persist)
+
+
+<<concrete>>
 ExecutorRegistry
 - executors: Map<QueryType, QueryExecutor>
 + register(type: QueryType, executor: QueryExecutor)
@@ -290,7 +300,7 @@ StorageEngine
 + transactionManager(): TransactionManager   // requires start(); throws if not started
 + lockManager(): LockManager   // requires start(); throws if not started
 + walManager(): WALManager   // requires start(); throws if not started
-owns (wired): CatalogManager, PhysicalStorage, TransactionManager, LockManager, WALManager
+owns (wired): CatalogManager, PhysicalStorage, TransactionManager, LockManager, WALManager, CheckpointScheduler
 owns (stubs, not wired): TableStore, IndexStore, BufferPool
 
 
@@ -463,7 +473,8 @@ owns durable change logging (catalog DDL today; page records later)
 + append(record: WalRecord)          // pending until flush
 + flush()                            // write wal.log + force durable
 + discardPending()                   // rollback of unflushed records
-+ replay(catalog: CatalogManager): int   // after catalog.load(); COMMIT-gated; writes replay/replay-<timestamp>.log
++ replay(catalog: CatalogManager): int   // after catalog.load(); COMMIT-gated; merges wal.checkpoint maxTxnId
++ checkpoint(): int                  // durable-only: update wal.checkpoint + append CHECKPOINT line (wal.log never rewritten)
 
 
 <<concrete>>
@@ -472,11 +483,50 @@ WalReplayReport / WalReplayLogWriter
 
 
 <<concrete>>
+WalCheckpointMeta
+- maxTxnId: int
+    // JSON in wal.checkpoint; survives truncate
+
+
+<<concrete>>
 DefaultWALManager
 - physicalStorage: PhysicalStorage
 - pending: ThreadLocal<List<WalRecord>>
-+ append / flush / discardPending / replay
-    // file: wal.log under store root; JSON lines with txnId + COMMIT marker
++ append / flush / discardPending / replay / checkpoint
+    // files: wal.log, wal.checkpoint under store root; JSON lines with txnId + COMMIT marker
+
+
+<<interface>>
+CheckpointStrategy
++ awaitTrigger()   // throws InterruptedException — when to run automatic checkpoint
+
+
+<<enumeration>>
+CheckpointStrategyKind
+TIMEOUT, WAL_SIZE
+
+
+<<concrete>>
+TimeoutCheckpointStrategy
+- timeout: Duration
++ awaitTrigger()
+
+
+<<concrete>>
+WalSizeCheckpointStrategy
+- physicalStorage: PhysicalStorage
+- maxWalSizeBytes: long
++ awaitTrigger()
+
+
+<<concrete>>
+CheckpointScheduler
+- strategy: CheckpointStrategy   // plug ONE at StorageEngine construction
+- lockManager: LockManager
+- walManager: WALManager
++ start() / stop()
+    // daemon loop: awaitTrigger → runExclusiveCatalog(walManager::checkpoint)
+    // manual CHECKPOINT is CheckpointExecutor, not a strategy
 
 
 <<concrete>>
@@ -490,7 +540,8 @@ WalRecord
 <<enumeration>>
 WalOp
 CREATE_DATABASE, DROP_DATABASE, CREATE_TABLE, DROP_TABLE,
-ADD_COLUMN, DROP_COLUMN, CREATE_INDEX, DROP_INDEX, COMMIT
+ADD_COLUMN, DROP_COLUMN, CREATE_INDEX, DROP_INDEX, COMMIT, CHECKPOINT
+    // CHECKPOINT is appended as a recovery fence; wal.log is never truncated or replaced
 
 
 <<concrete>>
@@ -545,8 +596,10 @@ DefaultStorageEngine
 - walManager: WALManager
 - transactionManager: TransactionManager
 - lockManager: LockManager
-+ start()                 // ensureExists, catalogManager.load(), walManager.replay(catalog)
-+ stop()
+- checkpointScheduler: CheckpointScheduler
+- checkpointEnabled: boolean
++ start()                 // load catalog, replay WAL, seed txnId, optionally start CheckpointScheduler
++ stop()                  // stop CheckpointScheduler
 + dataDirectory(): DataDirectory
 + catalogManager(): CatalogManager
 + transactionManager(): TransactionManager
@@ -572,11 +625,17 @@ LaunchConfig
 <<concrete>>
 ServerEnvironment
 + ENV_FILE_NAME: String
-+ CATALOG_LOCK_WAIT_SECONDS: String
-+ DEFAULT_CATALOG_LOCK_WAIT_SECONDS: int
-+ defaults(): ServerEnvironment
++ CATALOG_LOCK_WAIT_SECONDS / CHECKPOINT_ENABLED / CHECKPOINT_STRATEGY
++ CHECKPOINT_TIMEOUT_SECONDS / MAX_WAL_SIZE_BYTES
++ defaults(): ServerEnvironment   // checkpointEnabled=false (tests)
 + load(dataDirectory: DataDirectory): ServerEnvironment
 + catalogLockWait(): Duration
++ checkpointEnabled(): boolean
++ checkpointStrategyKind(): CheckpointStrategyKind
++ checkpointTimeout(): Duration
++ maxWalSizeBytes(): long
++ createCheckpointStrategy(physicalStorage: PhysicalStorage): CheckpointStrategy
+    // plugs timeout OR wal_size — one strategy for the scheduler
 
 
 <<interface>>
@@ -840,8 +899,10 @@ DatabaseServer
       │              │               └── TableMetadata → ColumnMetadata → ColumnType
       │              ├── TransactionManager → DefaultTransactionManager
       │              ├── LockManager → DefaultLockManager (catalog exclusive)
-      │              ├── WALManager → DefaultWALManager (wal.log)
+      │              ├── WALManager → DefaultWALManager (wal.log + wal.checkpoint)
+      │              ├── CheckpointScheduler → CheckpointStrategy (timeout | wal_size)
       │              │         └── CommandExecutor: txn → lock → WAL append+flush → CatalogManager
+      │              │         └── CheckpointExecutor: CHECKPOINT → lock → walManager.checkpoint()
       │              └── (later) TableStore, IndexStore, BufferPool
       ├── uses ▶ QueryProcessor
       │              │
@@ -849,10 +910,11 @@ DatabaseServer
       │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
       │                        ├── owns ▶ QueryParser (DefaultQueryParser)
       │                        ├── per query ▶ QueryAnalyser (DefaultQueryAnalyser + CatalogManager)
-      │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → DDL plans + DescribeTablePlan / ShowDatabasesPlan / ShowTablesPlan)
+      │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → DDL + CheckpointPlan + describe/show plans)
       │                        ├── QueryDispatcher → ExecutorRegistry
       │                        │         ├── CREATE_TABLE / DROP_TABLE / … / DROP_INDEX → CommandExecutor
       │                        │         ├── BEGIN / COMMIT / ROLLBACK → TransactionControlExecutor
+      │                        │         ├── CHECKPOINT → CheckpointExecutor
       │                        │         └── DESCRIBE_TABLE / SHOW_DATABASES / SHOW_TABLES → DescribeExecutor (catalog read only)
       │                        │              ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
       │                        │              └── AstNode (Query / Expression)
@@ -868,7 +930,7 @@ DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProces
 NetworkModule owns RequestHandler.
 Wire protocol v1: request frame = plain UTF-8 SQL; response frame = JSON WireResponse (see docs/protocol/wire-protocol.md). QueryProcessor returns QueryResult; DefaultRequestHandler calls result.toWireResponse() (Ok, Error, or ResultSet+Done). executeText() / toResponse() remain for tests and logging.
 DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryPlanner; builds DefaultQueryAnalyser and QueryDispatcher on first catalog use from StorageEngine managers (requires start()). Uses StorageEngine (does not own its lifecycle).
-execute() lexes, parses, analyses, plans, then runs plans through QueryDispatcher. Implicit DDL: TransactionManager.runInTransaction → LockManager.runExclusiveCatalog → WAL append (txnId) → CatalogManager → COMMIT+flush. Explicit BEGIN: TransactionControlExecutor holds lock, defer catalog persist until COMMIT. DESCRIBE / SHOW DATABASES / SHOW TABLES read CatalogManager only (no txn, lock, or WAL). Table names are database.table. Unresolved plans still echo OK <query>.
+execute() lexes, parses, analyses, plans, then runs plans through QueryDispatcher. Implicit DDL: TransactionManager.runInTransaction → LockManager.runExclusiveCatalog → WAL append (txnId) → CatalogManager → COMMIT+flush. Explicit BEGIN: TransactionControlExecutor holds lock, defer catalog persist until COMMIT. CHECKPOINT: CheckpointExecutor → exclusive catalog → WALManager.checkpoint() (update wal.checkpoint, append CHECKPOINT to wal.log — append-only); refused inside explicit txn. Background CheckpointScheduler plugs one CheckpointStrategy (timeout or wal_size) when CHECKPOINT_ENABLED. DESCRIBE / SHOW DATABASES / SHOW TABLES read CatalogManager only (no txn, lock, or WAL). Table names are database.table. Unresolved plans still echo OK <query>.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.processor.lexer (unchanged names).
 Parser types live under com.example.database.processor.parser.
@@ -880,7 +942,7 @@ database-client is a separate Maven module: DatabaseClient REPL over the same le
 
 Catalog (Phase 1.1–1.3):
 CatalogManager is a StorageEngine submodule and owns CatalogStore.
-DefaultStorageEngine constructs PhysicalStorage, DefaultCatalogManager, DefaultWALManager, DefaultTransactionManager(wal), and DefaultLockManager. start() loads catalog, replays WAL (COMMIT-gated txn groups), seeds next txnId.
+DefaultStorageEngine constructs PhysicalStorage, DefaultCatalogManager, DefaultWALManager, DefaultTransactionManager(wal), DefaultLockManager, and CheckpointScheduler (strategy from ServerEnvironment). start() loads catalog, replays WAL (COMMIT-gated; merges wal.checkpoint maxTxnId), seeds next txnId, starts scheduler if enabled.
 start() calls catalogManager.load() — the engine does not touch catalog files.
 createTable assigns ids and writes data/<db>/<table>/catalog.json. Restart: new engine, start, getTable("shop","users").
 CREATE DATABASE creates data/<name>/; DROP DATABASE removes an empty directory (fails if tables remain). load() lists those directories and per-table catalogs.

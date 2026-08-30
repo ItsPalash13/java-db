@@ -4,6 +4,7 @@ import com.example.database.processor.analyser.AnalysisException;
 import com.example.database.processor.analyser.AnalyzedQuery;
 import com.example.database.processor.analyser.DefaultQueryAnalyser;
 import com.example.database.processor.analyser.QueryAnalyser;
+import com.example.database.processor.executor.CheckpointExecutor;
 import com.example.database.processor.executor.CommandExecutor;
 import com.example.database.processor.executor.DescribeExecutor;
 import com.example.database.processor.executor.ExecutionException;
@@ -142,6 +143,11 @@ public final class DefaultQueryProcessor implements QueryProcessor {
                     storageEngine.lockManager(),
                     storageEngine.catalogManager()
             );
+            CheckpointExecutor checkpoint = new CheckpointExecutor(
+                    storageEngine.lockManager(),
+                    storageEngine.walManager(),
+                    storageEngine.transactionManager()
+            );
             DescribeExecutor describe = new DescribeExecutor(storageEngine.catalogManager());
             registry.register(QueryType.CREATE_TABLE, commands);
             registry.register(QueryType.DROP_TABLE, commands);
@@ -154,6 +160,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             registry.register(QueryType.BEGIN, transactionControl);
             registry.register(QueryType.COMMIT, transactionControl);
             registry.register(QueryType.ROLLBACK, transactionControl);
+            registry.register(QueryType.CHECKPOINT, checkpoint);
             registry.register(QueryType.DESCRIBE_TABLE, describe);
             registry.register(QueryType.SHOW_DATABASES, describe);
             registry.register(QueryType.SHOW_TABLES, describe);

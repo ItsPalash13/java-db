@@ -16,6 +16,7 @@ public enum QueryType {
     BEGIN,
     COMMIT,
     ROLLBACK,
+    CHECKPOINT,
     DESCRIBE_TABLE,
     SHOW_DATABASES,
     SHOW_TABLES,

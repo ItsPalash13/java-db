@@ -5,6 +5,7 @@ import com.example.database.processor.lexer.TokenCatalog;
 import com.example.database.processor.parser.ast.AstNode;
 import com.example.database.processor.parser.statement.AlterParser;
 import com.example.database.processor.parser.statement.BeginParser;
+import com.example.database.processor.parser.statement.CheckpointParser;
 import com.example.database.processor.parser.statement.CommitParser;
 import com.example.database.processor.parser.statement.CreateParser;
 import com.example.database.processor.parser.statement.DeleteParser;
@@ -38,6 +39,7 @@ public final class DefaultQueryParser implements QueryParser {
         registry.register(TokenCatalog.BEGIN, new BeginParser());
         registry.register(TokenCatalog.COMMIT, new CommitParser());
         registry.register(TokenCatalog.ROLLBACK, new RollbackParser());
+        registry.register(TokenCatalog.CHECKPOINT, new CheckpointParser());
         registry.register(TokenCatalog.DESCRIBE, new DescribeParser());
         registry.register(TokenCatalog.SHOW, new ShowParser());
     }

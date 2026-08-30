@@ -87,5 +87,10 @@ class DefaultTransactionManagerTest {
         public int replay(CatalogManager catalogManager) {
             return 0;
         }
+
+        @Override
+        public int checkpoint() {
+            return 0;
+        }
     }
 }

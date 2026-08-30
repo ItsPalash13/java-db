@@ -34,6 +34,7 @@ public final class DefaultQueryLexer implements QueryLexer {
             Map.entry("COMMIT", TokenCatalog.COMMIT),
             Map.entry("ROLLBACK", TokenCatalog.ROLLBACK),
             Map.entry("TRANSACTION", TokenCatalog.TRANSACTION),
+            Map.entry("CHECKPOINT", TokenCatalog.CHECKPOINT),
             Map.entry("DESCRIBE", TokenCatalog.DESCRIBE),
             Map.entry("DESC", TokenCatalog.DESCRIBE),
             Map.entry("SHOW", TokenCatalog.SHOW),

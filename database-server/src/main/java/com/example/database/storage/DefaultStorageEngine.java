@@ -3,6 +3,7 @@ package com.example.database.storage;
 import com.example.database.config.ServerEnvironment;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.DefaultCatalogManager;
+import com.example.database.storage.checkpoint.CheckpointScheduler;
 import com.example.database.storage.lock.DefaultLockManager;
 import com.example.database.storage.lock.LockManager;
 import com.example.database.storage.physical.DefaultPhysicalStorage;
@@ -16,8 +17,8 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Owns the data directory, physical files, catalog, transactions, locks, and WAL.
- * Catalog JSON lives inside {@link CatalogManager}, not here.
+ * Owns the data directory, physical files, catalog, transactions, locks, WAL, and
+ * optional checkpoint scheduler. Catalog JSON lives inside {@link CatalogManager}, not here.
  */
 public final class DefaultStorageEngine implements StorageEngine {
 
@@ -27,6 +28,9 @@ public final class DefaultStorageEngine implements StorageEngine {
     private final WALManager walManager;
     private final TransactionManager transactionManager;
     private final LockManager lockManager;
+    private final CheckpointScheduler checkpointScheduler;
+    // From ServerEnvironment: defaults() leaves this false so unit tests do not start a daemon.
+    private final boolean checkpointEnabled;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     public DefaultStorageEngine(DataDirectory dataDirectory) {
@@ -41,6 +45,14 @@ public final class DefaultStorageEngine implements StorageEngine {
         this.walManager = new DefaultWALManager(physicalStorage);
         this.transactionManager = new DefaultTransactionManager(walManager);
         this.lockManager = new DefaultLockManager(environment.catalogLockWait());
+        this.checkpointEnabled = environment.checkpointEnabled();
+        // Strategy is chosen once at construction (timeout XOR wal_size). SQL CHECKPOINT
+        // does not go through this scheduler — CheckpointExecutor calls walManager directly.
+        this.checkpointScheduler = new CheckpointScheduler(
+                environment.createCheckpointStrategy(physicalStorage),
+                lockManager,
+                walManager
+        );
     }
 
     @Override
@@ -79,9 +91,14 @@ public final class DefaultStorageEngine implements StorageEngine {
         }
         dataDirectory.ensureExists();
         // Disk snapshot first; WAL then fills any committed intent that never landed in catalog.json.
+        // Replay also reads wal.checkpoint so maxTxnId survives a prior truncate.
         catalogManager.load();
         int maxTxnId = walManager.replay(catalogManager);
         transactionManager.seedNextTxnId(maxTxnId + 1);
+        if (checkpointEnabled) {
+            // After recovery is complete — never checkpoint while still replaying.
+            checkpointScheduler.start();
+        }
         System.out.println("[StorageEngine] data directory: " + dataDirectory.root());
         System.out.println("[StorageEngine] started");
     }
@@ -91,6 +108,8 @@ public final class DefaultStorageEngine implements StorageEngine {
         if (!running.compareAndSet(true, false)) {
             return;
         }
+        // Always stop: even if never started (checkpointEnabled=false), stop() is idempotent.
+        checkpointScheduler.stop();
         System.out.println("[StorageEngine] stopped");
     }
 

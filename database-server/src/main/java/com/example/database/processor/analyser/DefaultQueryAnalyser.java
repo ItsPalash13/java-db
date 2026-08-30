@@ -6,6 +6,7 @@ import com.example.database.processor.parser.ast.ColumnSqlType;
 import com.example.database.processor.parser.ast.QualifiedTable;
 import com.example.database.processor.parser.ast.query.AlterTableQuery;
 import com.example.database.processor.parser.ast.query.BeginQuery;
+import com.example.database.processor.parser.ast.query.CheckpointQuery;
 import com.example.database.processor.parser.ast.query.CommitQuery;
 import com.example.database.processor.parser.ast.query.CreateDatabaseQuery;
 import com.example.database.processor.parser.ast.query.CreateIndexQuery;
@@ -73,6 +74,9 @@ public final class DefaultQueryAnalyser implements QueryAnalyser {
         }
         if (ast instanceof RollbackQuery) {
             return new AnalyzedRollback();
+        }
+        if (ast instanceof CheckpointQuery) {
+            return new AnalyzedCheckpoint();
         }
         if (ast instanceof DescribeTableQuery describe) {
             return analyseDescribeTable(describe);

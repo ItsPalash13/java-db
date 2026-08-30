@@ -15,6 +15,7 @@ public sealed interface ExecutionPlan permits
         BeginPlan,
         CommitPlan,
         RollbackPlan,
+        CheckpointPlan,
         DescribeTablePlan,
         ShowDatabasesPlan,
         ShowTablesPlan,

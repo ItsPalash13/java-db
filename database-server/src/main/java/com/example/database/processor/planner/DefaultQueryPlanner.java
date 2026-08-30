@@ -2,6 +2,7 @@ package com.example.database.processor.planner;
 
 import com.example.database.processor.analyser.AnalyzedAddColumn;
 import com.example.database.processor.analyser.AnalyzedBegin;
+import com.example.database.processor.analyser.AnalyzedCheckpoint;
 import com.example.database.processor.analyser.AnalyzedCommit;
 import com.example.database.processor.analyser.AnalyzedCreateDatabase;
 import com.example.database.processor.analyser.AnalyzedCreateIndex;
@@ -64,6 +65,9 @@ public final class DefaultQueryPlanner implements QueryPlanner {
         }
         if (analyzed instanceof AnalyzedRollback) {
             return new RollbackPlan();
+        }
+        if (analyzed instanceof AnalyzedCheckpoint) {
+            return new CheckpointPlan();
         }
         if (analyzed instanceof AnalyzedDescribeTable describe) {
             return new DescribeTablePlan(describe.database(), describe.table());

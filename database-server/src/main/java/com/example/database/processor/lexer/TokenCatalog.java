@@ -29,6 +29,8 @@ public enum TokenCatalog {
     ROLLBACK,
     TRANSACTION,
 
+    CHECKPOINT,
+
     DESCRIBE,
     SHOW,
     DATABASES,

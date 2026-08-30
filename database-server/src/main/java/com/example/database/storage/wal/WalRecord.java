@@ -45,6 +45,18 @@ public final class WalRecord {
         return new WalRecord(WalOp.COMMIT, txnId, null, null, null, null, null);
     }
 
+    /**
+     * Barrier marker appended to {@code wal.log} on checkpoint (never replaces prior lines).
+     * For {@link WalOp#CHECKPOINT}, {@code txnId} is the high-water mark (may be null if 0).
+     */
+    public static WalRecord checkpoint(int maxTxnId) {
+        if (maxTxnId < 0) {
+            throw new IllegalArgumentException("maxTxnId must be >= 0");
+        }
+        Integer encoded = maxTxnId == 0 ? null : maxTxnId;
+        return new WalRecord(WalOp.CHECKPOINT, encoded, null, null, null, null, null);
+    }
+
     public static WalRecord createDatabase(int txnId, String database) {
         return ddl(WalOp.CREATE_DATABASE, txnId, require(database, "database"), null, null, null, null);
     }
