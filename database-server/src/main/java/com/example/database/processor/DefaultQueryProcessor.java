@@ -27,6 +27,7 @@ import com.example.database.processor.planner.UnresolvedPlan;
 import com.example.database.storage.DataDirectory;
 import com.example.database.storage.DefaultStorageEngine;
 import com.example.database.storage.StorageEngine;
+import com.example.database.storage.lock.CatalogLockException;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -112,7 +113,19 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             String error = e.toResponse();
             System.out.println("[QueryProcessor] execute error: " + error);
             return QueryResult.error(error);
+        } catch (CatalogLockException e) {
+            String error = "ERROR: " + e.getMessage();
+            System.out.println("[QueryProcessor] lock error: " + error);
+            return QueryResult.error(error);
         }
+    }
+
+    @Override
+    public void endConnectionSession() {
+        storageEngine.transactionManager().endConnectionSession(
+                storageEngine.lockManager(),
+                storageEngine.catalogManager()
+        );
     }
 
     private QueryDispatcher queryDispatcher() {

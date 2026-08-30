@@ -1,5 +1,6 @@
 package com.example.database.storage;
 
+import com.example.database.config.ServerEnvironment;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.DefaultCatalogManager;
 import com.example.database.storage.lock.DefaultLockManager;
@@ -29,12 +30,17 @@ public final class DefaultStorageEngine implements StorageEngine {
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     public DefaultStorageEngine(DataDirectory dataDirectory) {
+        this(dataDirectory, ServerEnvironment.defaults());
+    }
+
+    public DefaultStorageEngine(DataDirectory dataDirectory, ServerEnvironment environment) {
         this.dataDirectory = Objects.requireNonNull(dataDirectory, "dataDirectory");
+        Objects.requireNonNull(environment, "environment");
         this.physicalStorage = new DefaultPhysicalStorage(dataDirectory);
         this.catalogManager = new DefaultCatalogManager(physicalStorage);
         this.walManager = new DefaultWALManager(physicalStorage);
         this.transactionManager = new DefaultTransactionManager(walManager);
-        this.lockManager = new DefaultLockManager();
+        this.lockManager = new DefaultLockManager(environment.catalogLockWait());
     }
 
     @Override

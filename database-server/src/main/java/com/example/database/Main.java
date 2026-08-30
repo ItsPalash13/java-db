@@ -1,5 +1,6 @@
 package com.example.database;
 
+import com.example.database.config.ServerEnvironment;
 import com.example.database.network.NetworkModule;
 import com.example.database.network.ServerSocket;
 import com.example.database.network.tcp.TcpNetworkModule;
@@ -25,7 +26,12 @@ public final class Main {
     public static void main(String[] args) throws IOException, InterruptedException {
         LaunchConfig config = LaunchConfig.parse(args);
         DataDirectory dataDirectory = new DataDirectory(config.dataDir());
-        StorageEngine storageEngine = new DefaultStorageEngine(dataDirectory);
+        dataDirectory.ensureExists();
+        ServerEnvironment environment = ServerEnvironment.load(dataDirectory);
+        System.out.println(
+                "[Main] catalog lock wait: " + environment.catalogLockWait().toSeconds() + "s"
+        );
+        StorageEngine storageEngine = new DefaultStorageEngine(dataDirectory, environment);
 
         QueryProcessor queryProcessor = new DefaultQueryProcessor(storageEngine);
         // Listen socket is created here so bind/port stay at the edge (not inside TcpNetworkModule).

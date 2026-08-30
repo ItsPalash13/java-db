@@ -5,6 +5,8 @@
 - `db-accept`: one daemon thread; blocking `accept()` so `TcpNetworkModule.start()` can return.
 - `db-conn-*`: `java.util.concurrent` cached daemon pool; one worker per open client.
 - On each `db-conn-*` thread: receive → `RequestHandler` → `QueryProcessor` → `QueryDispatcher` → `CommandExecutor` → send (same thread, no extra pool).
+- `TcpNetworkModule.handle` `finally`: `RequestHandler.onConnectionClosed()` → `QueryProcessor.endConnectionSession()` rolls back an open explicit txn on that worker thread and releases the catalog lock.
+- `DefaultLockManager`: one `ReentrantLock` for all catalog DDL; `BEGIN` and implicit DDL wait up to 30s (`CatalogLockException` on timeout).
 - `TcpNetworkModule.running`: `AtomicBoolean` for idempotent start/stop and to tell a closed listen socket from a real accept failure.
 - Stop: close the listen socket (unblocks `accept`), then `workers.shutdownNow()` + `awaitTermination`.
 - Worker names: `AtomicInteger` in the thread factory (`db-conn-1`, `db-conn-2`, …).
@@ -14,4 +16,3 @@
 
 - `QueryDispatcher`: lookup `QueryType` → `QueryExecutor`, then `execute()` on the caller thread.
 - `ExecutorRegistry`: map only; no scheduling.
-- `LockManager` / `TransactionManager`: empty interfaces; not wired.

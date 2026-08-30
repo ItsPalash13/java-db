@@ -21,4 +21,11 @@ public interface QueryProcessor {
     default String executeText(String query) {
         return execute(query).toResponse();
     }
+
+    /**
+     * TCP disconnect on this worker thread: roll back an open explicit txn and release
+     * the catalog lock. No-op when no session is active.
+     */
+    default void endConnectionSession() {
+    }
 }

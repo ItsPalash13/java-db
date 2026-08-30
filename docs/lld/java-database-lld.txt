@@ -28,6 +28,7 @@ DefaultRequestHandler
 QueryProcessor
 + execute(query: String): QueryResult
 + executeText(query: String): String   // default: execute().toResponse()
++ endConnectionSession()   // TCP disconnect cleanup on worker thread
 
 
 <<concrete>>
@@ -408,17 +409,22 @@ owns concurrency locks (catalog exclusive today; table S/X later)
 + runExclusiveCatalog(action: Runnable)
 + runExclusiveCatalog(action: Supplier<T>): T
     // blocking ReentrantLock; unlock in finally
-+ lockExclusiveCatalog()
-+ tryLockExclusiveCatalog(): boolean   // non-blocking; used by explicit BEGIN
++ lockExclusiveCatalog()   // waits up to catalogLockWait; throws CatalogLockException on timeout
 + unlockExclusiveCatalog()
+
+
+<<concrete>>
+CatalogLockException
++ message
 
 
 <<concrete>>
 DefaultLockManager
 - catalogLock: ReentrantLock
+- catalogLockWait: Duration   // from ServerEnvironment; default 30s
 + runExclusiveCatalog(action: Runnable)
 + runExclusiveCatalog(action: Supplier<T>): T
-+ lockExclusiveCatalog / tryLockExclusiveCatalog / unlockExclusiveCatalog
++ lockExclusiveCatalog / unlockExclusiveCatalog
 
 
 <<interface>>
@@ -442,7 +448,8 @@ DefaultTransactionManager
 - nextTxnId: AtomicInteger
 - context: ThreadLocal<TransactionContext>
 + implicit: allocate txnId → append DDL → append COMMIT → flush
-+ explicit: BEGIN uses tryLockExclusiveCatalog (fail fast "catalog is locked"); holds lock until COMMIT/ROLLBACK
++ explicit: BEGIN waits for catalog lock (same timeout as implicit DDL); COMMIT/ROLLBACK release
++ endConnectionSession: disconnect rollback on connection worker thread
 
 
 <<concrete>>
@@ -560,6 +567,16 @@ LaunchConfig
 - port: int
 - dataDir: Path
 + parse(args: String[]): LaunchConfig
+
+
+<<concrete>>
+ServerEnvironment
++ ENV_FILE_NAME: String
++ CATALOG_LOCK_WAIT_SECONDS: String
++ DEFAULT_CATALOG_LOCK_WAIT_SECONDS: int
++ defaults(): ServerEnvironment
++ load(dataDirectory: DataDirectory): ServerEnvironment
++ catalogLockWait(): Duration
 
 
 <<interface>>

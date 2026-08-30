@@ -2,12 +2,15 @@ package com.example.database.storage.lock;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DefaultLockManagerTest {
@@ -76,5 +79,30 @@ class DefaultLockManagerTest {
 
         // If unlock failed, this would block forever.
         assertTrue(locks.runExclusiveCatalog(() -> true));
+    }
+
+    @Test
+    void runExclusiveCatalogTimesOutWhenLockIsHeld() throws Exception {
+        DefaultLockManager locks = new DefaultLockManager(Duration.ofMillis(200));
+        CountDownLatch holderReady = new CountDownLatch(1);
+        Thread holder = new Thread(() -> locks.runExclusiveCatalog(() -> {
+            holderReady.countDown();
+            try {
+                Thread.sleep(2_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return null;
+        }));
+        holder.start();
+        holderReady.await(5, TimeUnit.SECONDS);
+
+        CatalogLockException error = assertThrows(
+                CatalogLockException.class,
+                () -> locks.runExclusiveCatalog(() -> true)
+        );
+        assertTrue(error.getMessage().contains("timed out"));
+
+        holder.join(3_000);
     }
 }

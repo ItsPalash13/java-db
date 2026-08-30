@@ -10,8 +10,8 @@ import java.util.function.Supplier;
 public interface LockManager {
 
     /**
-     * Runs {@code action} while holding the exclusive catalog lock (blocking).
-     * Serializes all DDL that mutates schema / catalog files.
+     * Runs {@code action} while holding the exclusive catalog lock. Waits up to the
+     * configured lock timeout, then throws {@link CatalogLockException}.
      */
     void runExclusiveCatalog(Runnable action);
 
@@ -21,17 +21,12 @@ public interface LockManager {
     <T> T runExclusiveCatalog(Supplier<T> action);
 
     /**
-     * Acquires the catalog lock for an explicit transaction that spans multiple statements.
+     * Waits for the catalog lock for an explicit transaction that spans multiple statements.
      * Must pair with {@link #unlockExclusiveCatalog()}.
+     *
+     * @throws CatalogLockException if the wait exceeds the configured timeout
      */
     void lockExclusiveCatalog();
-
-    /**
-     * Non-blocking attempt to take the catalog lock for explicit {@code BEGIN}.
-     *
-     * @return {@code true} if this thread now holds the lock
-     */
-    boolean tryLockExclusiveCatalog();
 
     /** Releases the catalog lock taken by {@link #lockExclusiveCatalog()}. */
     void unlockExclusiveCatalog();

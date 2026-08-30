@@ -77,10 +77,7 @@ public final class DefaultTransactionManager implements TransactionManager {
         if (context.get().active()) {
             throw new IllegalStateException("transaction already active");
         }
-        // Fail fast so a second connection gets an error instead of blocking forever.
-        if (!lockManager.tryLockExclusiveCatalog()) {
-            throw new IllegalStateException("catalog is locked");
-        }
+        lockManager.lockExclusiveCatalog();
         try {
             int txnId = allocateTxnId();
             CatalogSnapshot snapshot = catalogManager.snapshot();

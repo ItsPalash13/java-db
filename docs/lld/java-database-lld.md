@@ -32,6 +32,7 @@ classDiagram
         <<interface>>
         +execute(String query) QueryResult
         +executeText(String query) String
+        +endConnectionSession()
     }
 
     class DefaultQueryProcessor {
@@ -460,16 +461,20 @@ classDiagram
         +runExclusiveCatalog(Runnable action)
         +runExclusiveCatalog(Supplier~T~ action) T
         +lockExclusiveCatalog()
-        +tryLockExclusiveCatalog() boolean
         +unlockExclusiveCatalog()
+    }
+
+    class CatalogLockException {
+        <<concrete>>
     }
 
     class DefaultLockManager {
         <<concrete>>
         -ReentrantLock catalogLock
+        -Duration catalogLockWait
         +runExclusiveCatalog(Runnable action)
         +runExclusiveCatalog(Supplier~T~ action) T
-        +lockExclusiveCatalog / tryLockExclusiveCatalog / unlockExclusiveCatalog
+        +lockExclusiveCatalog / unlockExclusiveCatalog
     }
 
     class TransactionManager {
@@ -547,6 +552,13 @@ classDiagram
         -int port
         -Path dataDir
         +parse(String[] args) LaunchConfig
+    }
+
+    class ServerEnvironment {
+        <<concrete>>
+        +load(DataDirectory dataDirectory) ServerEnvironment
+        +defaults() ServerEnvironment
+        +catalogLockWait() Duration
     }
 
     class QueryLexer {
