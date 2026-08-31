@@ -2,7 +2,6 @@ package com.example.database.processor.planner;
 
 /**
  * Statement kinds the planner/executor dispatch on.
- * CREATE/DROP TABLE and CREATE/DROP DATABASE are commands; other SQL stays {@link #UNRESOLVED}.
  */
 public enum QueryType {
     CREATE_TABLE,
@@ -20,5 +19,9 @@ public enum QueryType {
     DESCRIBE_TABLE,
     SHOW_DATABASES,
     SHOW_TABLES,
+    SELECT,
+    INSERT,
+    UPDATE,
+    DELETE,
     UNRESOLVED
 }

@@ -25,9 +25,20 @@ class DefaultQueryProcessorTest {
     Path dataDir;
 
     @Test
-    void executeReturnsOkForValidQuery() {
+    void executeSelectWithoutTableIsAnalysisError() {
         DefaultQueryProcessor processor = newProcessor();
-        assertEquals("OK SELECT * FROM shop.users", processor.executeText("SELECT * FROM shop.users"));
+        assertEquals(
+                "ERROR: database does not exist: shop",
+                processor.executeText("SELECT * FROM shop.users")
+        );
+    }
+
+    @Test
+    void executeSelectAfterCreateTableReturnsOkFromDeferredExecutor() {
+        DefaultQueryProcessor processor = newProcessor();
+        assertEquals("OK", processor.executeText("CREATE DATABASE shop"));
+        assertEquals("OK", processor.executeText("CREATE TABLE shop.users (id INT, name VARCHAR)"));
+        assertEquals("OK", processor.executeText("SELECT * FROM shop.users"));
     }
 
     @Test
@@ -196,11 +207,26 @@ class DefaultQueryProcessorTest {
     }
 
     @Test
-    void executeReturnsOkForUnresolvedInsertUpdateDelete() {
+    void executeDmlRejectsMissingTableThenAcceptsAfterCreate() {
         DefaultQueryProcessor processor = newProcessor();
-        assertEquals("OK INSERT INTO shop.t VALUES (1)", processor.executeText("INSERT INTO shop.t VALUES (1)"));
-        assertEquals("OK UPDATE shop.t SET a = 1", processor.executeText("UPDATE shop.t SET a = 1"));
-        assertEquals("OK DELETE FROM shop.t", processor.executeText("DELETE FROM shop.t"));
+        assertEquals(
+                "ERROR: database does not exist: shop",
+                processor.executeText("INSERT INTO shop.items VALUES (1)")
+        );
+        assertEquals(
+                "ERROR: database does not exist: shop",
+                processor.executeText("UPDATE shop.items SET a = 1")
+        );
+        assertEquals(
+                "ERROR: database does not exist: shop",
+                processor.executeText("DELETE FROM shop.items")
+        );
+
+        assertEquals("OK", processor.executeText("CREATE DATABASE shop"));
+        assertEquals("OK", processor.executeText("CREATE TABLE shop.items (a INT)"));
+        assertEquals("OK", processor.executeText("INSERT INTO shop.items VALUES (1)"));
+        assertEquals("OK", processor.executeText("UPDATE shop.items SET a = 1"));
+        assertEquals("OK", processor.executeText("DELETE FROM shop.items"));
     }
 
     @Test

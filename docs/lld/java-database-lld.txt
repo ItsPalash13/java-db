@@ -50,11 +50,12 @@ QueryAnalyser
 DefaultQueryAnalyser
 - catalogManager: CatalogManager
 + analyse(ast: AstNode): AnalyzedQuery
+    // DDL + DML/DQL name resolution; never mutates catalog
 
 
 <<interface>>
 AnalyzedQuery
-<<sealed>> permits AnalyzedCreateTable, AnalyzedCreateDatabase, AnalyzedDropTable, AnalyzedDropDatabase, AnalyzedAddColumn, AnalyzedDropColumn, AnalyzedCreateIndex, AnalyzedDropIndex, AnalyzedBegin, AnalyzedCommit, AnalyzedRollback, AnalyzedDescribeTable, AnalyzedShowDatabases, AnalyzedShowTables, UnresolvedQuery
+<<sealed>> permits AnalyzedCreateTable, AnalyzedCreateDatabase, AnalyzedDropTable, AnalyzedDropDatabase, AnalyzedAddColumn, AnalyzedDropColumn, AnalyzedCreateIndex, AnalyzedDropIndex, AnalyzedBegin, AnalyzedCommit, AnalyzedRollback, AnalyzedDescribeTable, AnalyzedShowDatabases, AnalyzedShowTables, AnalyzedSelect, AnalyzedInsert, AnalyzedUpdate, AnalyzedDelete, UnresolvedQuery
 
 
 <<concrete>>
@@ -125,6 +126,66 @@ AnalyzedShowTables
 
 
 <<concrete>>
+ResolvedProjection
+- columnId: OptionalInt   // empty for literals
+- name: String            // empty for literals
+- type: ColumnType
+- literalValue: Object
++ column(column: ColumnMetadata): ResolvedProjection
++ literal(type: ColumnType, value: Object): ResolvedProjection
+
+
+<<concrete>>
+ResolvedInsertValue
+- columnId: int
+- type: ColumnType
+- value: Object   // null only for omitted nullable columns
+
+
+<<concrete>>
+ResolvedAssignment
+- columnId: int
+- type: ColumnType
+- value: Expression
+
+
+<<concrete>>
+AnalyzedSelect
+- database: String
+- table: String
+- projections: List<ResolvedProjection>
+- where: Expression
+- columns: List<ColumnMetadata>   // copied from catalog for planner
+- indexes: List<IndexMetadata>
+
+
+<<concrete>>
+AnalyzedInsert
+- database: String
+- table: String
+- values: List<ResolvedInsertValue>   // catalog column order
+
+
+<<concrete>>
+AnalyzedUpdate
+- database: String
+- table: String
+- assignments: List<ResolvedAssignment>
+- where: Expression
+- columns: List<ColumnMetadata>
+- indexes: List<IndexMetadata>
+
+
+<<concrete>>
+AnalyzedDelete
+- database: String
+- table: String
+- where: Expression
+- columns: List<ColumnMetadata>
+- indexes: List<IndexMetadata>
+
+
+<<concrete>>
 UnresolvedQuery
 - source: AstNode
 
@@ -136,12 +197,12 @@ AnalysisException
 
 <<enumeration>>
 QueryType
-CREATE_TABLE, DROP_TABLE, CREATE_DATABASE, DROP_DATABASE, ADD_COLUMN, DROP_COLUMN, CREATE_INDEX, DROP_INDEX, BEGIN, COMMIT, ROLLBACK, CHECKPOINT, DESCRIBE_TABLE, SHOW_DATABASES, SHOW_TABLES, UNRESOLVED
+CREATE_TABLE, DROP_TABLE, CREATE_DATABASE, DROP_DATABASE, ADD_COLUMN, DROP_COLUMN, CREATE_INDEX, DROP_INDEX, BEGIN, COMMIT, ROLLBACK, CHECKPOINT, DESCRIBE_TABLE, SHOW_DATABASES, SHOW_TABLES, SELECT, INSERT, UPDATE, DELETE, UNRESOLVED
 
 
 <<interface>>
 ExecutionPlan
-<<sealed>> permits CreateTablePlan, CreateDatabasePlan, DropTablePlan, DropDatabasePlan, AddColumnPlan, DropColumnPlan, CreateIndexPlan, DropIndexPlan, BeginPlan, CommitPlan, RollbackPlan, DescribeTablePlan, ShowDatabasesPlan, ShowTablesPlan, UnresolvedPlan
+<<sealed>> permits CreateTablePlan, CreateDatabasePlan, DropTablePlan, DropDatabasePlan, AddColumnPlan, DropColumnPlan, CreateIndexPlan, DropIndexPlan, BeginPlan, CommitPlan, RollbackPlan, DescribeTablePlan, ShowDatabasesPlan, ShowTablesPlan, SelectPlan, InsertPlan, UpdatePlan, DeletePlan, UnresolvedPlan
 + queryType(): QueryType
 
 
@@ -198,6 +259,47 @@ DropIndexPlan
 
 
 <<concrete>>
+AccessPath
+- kind: TABLE_SCAN | INDEX_SCAN
+- indexName: String   // null for table scan
++ tableScan(): AccessPath
++ indexScan(indexName: String): AccessPath
+
+
+<<concrete>>
+SelectPlan
+- database: String
+- table: String
+- projections: List<ResolvedProjection>
+- where: Expression
+- accessPath: AccessPath
+
+
+<<concrete>>
+InsertPlan
+- database: String
+- table: String
+- values: List<ResolvedInsertValue>
+
+
+<<concrete>>
+UpdatePlan
+- database: String
+- table: String
+- assignments: List<ResolvedAssignment>
+- where: Expression
+- accessPath: AccessPath
+
+
+<<concrete>>
+DeletePlan
+- database: String
+- table: String
+- where: Expression
+- accessPath: AccessPath
+
+
+<<concrete>>
 UnresolvedPlan
 - source: UnresolvedQuery
 
@@ -210,7 +312,7 @@ QueryPlanner
 <<concrete>>
 DefaultQueryPlanner
 + plan(analyzed: AnalyzedQuery): ExecutionPlan
-    // no CatalogManager / PhysicalStorage
+    // no CatalogManager / PhysicalStorage; access path from analyzed indexes
 
 
 <<concrete>>
@@ -236,6 +338,7 @@ ExecutionException
 <<interface>>
 QueryExecutor
 + execute(plan: ExecutionPlan): QueryResult
+    // DDL → CommandExecutor; DML/DQL → DeferredRowExecutor until Volcano
 
 
 <<concrete>>
@@ -248,6 +351,13 @@ CommandExecutor
     // begin txn → catalog lock → append+flush WAL → catalog write → unlock → commit
     // CREATE_TABLE / DROP_TABLE / CREATE_DATABASE / DROP_DATABASE / ADD_COLUMN / DROP_COLUMN / CREATE_INDEX / DROP_INDEX
     // writes catalog; not Volcano
+
+
+<<concrete>>
+DeferredRowExecutor
++ execute(plan: ExecutionPlan): QueryResult
+    // SELECT / INSERT / UPDATE / DELETE placeholder until Volcano
+    // returns OK; ignores access path; not wired to TableStore
 
 
 <<concrete>>
@@ -910,12 +1020,13 @@ DatabaseServer
       │                        ├── owns ▶ QueryLexer  → Token (TokenCatalog)
       │                        ├── owns ▶ QueryParser (DefaultQueryParser)
       │                        ├── per query ▶ QueryAnalyser (DefaultQueryAnalyser + CatalogManager)
-      │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → DDL + CheckpointPlan + describe/show plans)
+      │                        ├── owns ▶ QueryPlanner (DefaultQueryPlanner → DDL + DML/DQL plans; catalog-free)
       │                        ├── QueryDispatcher → ExecutorRegistry
       │                        │         ├── CREATE_TABLE / DROP_TABLE / … / DROP_INDEX → CommandExecutor
       │                        │         ├── BEGIN / COMMIT / ROLLBACK → TransactionControlExecutor
       │                        │         ├── CHECKPOINT → CheckpointExecutor
-      │                        │         └── DESCRIBE_TABLE / SHOW_DATABASES / SHOW_TABLES → DescribeExecutor (catalog read only)
+      │                        │         ├── DESCRIBE_TABLE / SHOW_DATABASES / SHOW_TABLES → DescribeExecutor (catalog read only)
+      │                        │         └── SELECT / INSERT / UPDATE / DELETE → DeferredRowExecutor (until Volcano)
       │                        │              ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
       │                        │              └── AstNode (Query / Expression)
       │                        └── uses ▶ StorageEngine (shared)
@@ -930,7 +1041,7 @@ DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProces
 NetworkModule owns RequestHandler.
 Wire protocol v1: request frame = plain UTF-8 SQL; response frame = JSON WireResponse (see docs/protocol/wire-protocol.md). QueryProcessor returns QueryResult; DefaultRequestHandler calls result.toWireResponse() (Ok, Error, or ResultSet+Done). executeText() / toResponse() remain for tests and logging.
 DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryPlanner; builds DefaultQueryAnalyser and QueryDispatcher on first catalog use from StorageEngine managers (requires start()). Uses StorageEngine (does not own its lifecycle).
-execute() lexes, parses, analyses, plans, then runs plans through QueryDispatcher. Implicit DDL: TransactionManager.runInTransaction → LockManager.runExclusiveCatalog → WAL append (txnId) → CatalogManager → COMMIT+flush. Explicit BEGIN: TransactionControlExecutor holds lock, defer catalog persist until COMMIT. CHECKPOINT: CheckpointExecutor → exclusive catalog → WALManager.checkpoint() (update wal.checkpoint, append CHECKPOINT to wal.log — append-only); refused inside explicit txn. Background CheckpointScheduler plugs one CheckpointStrategy (timeout or wal_size) when CHECKPOINT_ENABLED. DESCRIBE / SHOW DATABASES / SHOW TABLES read CatalogManager only (no txn, lock, or WAL). Table names are database.table. Unresolved plans still echo OK <query>.
+execute() lexes, parses, analyses, plans, then runs plans through QueryDispatcher. Implicit DDL: TransactionManager.runInTransaction → LockManager.runExclusiveCatalog → WAL append (txnId) → CatalogManager → COMMIT+flush. Explicit BEGIN: TransactionControlExecutor holds lock, defer catalog persist until COMMIT. CHECKPOINT: CheckpointExecutor → exclusive catalog → WALManager.checkpoint() (update wal.checkpoint, append CHECKPOINT to wal.log — append-only); refused inside explicit txn. Background CheckpointScheduler plugs one CheckpointStrategy (timeout or wal_size) when CHECKPOINT_ENABLED. DESCRIBE / SHOW DATABASES / SHOW TABLES read CatalogManager only (no txn, lock, or WAL). Table names are database.table. SELECT / INSERT / UPDATE / DELETE are analysed and planned (table vs index scan from catalog IndexMetadata); DeferredRowExecutor returns OK until Volcano. Unresolved plans still echo OK <query>.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.processor.lexer (unchanged names).
 Parser types live under com.example.database.processor.parser.

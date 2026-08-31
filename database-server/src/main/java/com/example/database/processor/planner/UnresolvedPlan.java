@@ -5,8 +5,7 @@ import com.example.database.processor.analyser.UnresolvedQuery;
 import java.util.Objects;
 
 /**
- * Analyzed but not planned yet (SELECT, INSERT, …). Executor in 1.7 should not
- * treat this as CREATE TABLE.
+ * Analyzed but not planned yet. Remaining catch-all; DML/DQL has typed plans.
  */
 public final class UnresolvedPlan implements ExecutionPlan {
 

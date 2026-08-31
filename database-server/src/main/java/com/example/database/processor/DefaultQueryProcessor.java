@@ -6,6 +6,7 @@ import com.example.database.processor.analyser.DefaultQueryAnalyser;
 import com.example.database.processor.analyser.QueryAnalyser;
 import com.example.database.processor.executor.CheckpointExecutor;
 import com.example.database.processor.executor.CommandExecutor;
+import com.example.database.processor.executor.DeferredRowExecutor;
 import com.example.database.processor.executor.DescribeExecutor;
 import com.example.database.processor.executor.ExecutionException;
 import com.example.database.processor.executor.ExecutorRegistry;
@@ -36,6 +37,7 @@ import java.util.Objects;
 
 /**
  * Lex → parse → analyse → plan → execute. DDL writes the catalog; DESCRIBE/SHOW read it.
+ * SELECT/INSERT/UPDATE/DELETE are planned then acknowledged by {@link DeferredRowExecutor}.
  */
 public final class DefaultQueryProcessor implements QueryProcessor {
 
@@ -149,6 +151,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
                     storageEngine.transactionManager()
             );
             DescribeExecutor describe = new DescribeExecutor(storageEngine.catalogManager());
+            DeferredRowExecutor deferredRows = new DeferredRowExecutor();
             registry.register(QueryType.CREATE_TABLE, commands);
             registry.register(QueryType.DROP_TABLE, commands);
             registry.register(QueryType.CREATE_DATABASE, commands);
@@ -164,6 +167,10 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             registry.register(QueryType.DESCRIBE_TABLE, describe);
             registry.register(QueryType.SHOW_DATABASES, describe);
             registry.register(QueryType.SHOW_TABLES, describe);
+            registry.register(QueryType.SELECT, deferredRows);
+            registry.register(QueryType.INSERT, deferredRows);
+            registry.register(QueryType.UPDATE, deferredRows);
+            registry.register(QueryType.DELETE, deferredRows);
             queryDispatcher = new QueryDispatcher(registry);
         }
         return queryDispatcher;

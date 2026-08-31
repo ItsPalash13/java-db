@@ -1,8 +1,8 @@
 package com.example.database.processor.analyser;
 
 /**
- * Result of semantic analysis. CREATE/DROP TABLE and CREATE/DROP DATABASE become
- * analyzed forms; other statement types stay {@link UnresolvedQuery} until their own phases.
+ * Result of semantic analysis. DDL and DML/DQL become analyzed forms;
+ * anything not yet handled stays {@link UnresolvedQuery}.
  */
 public sealed interface AnalyzedQuery permits
         AnalyzedCreateTable,
@@ -20,5 +20,9 @@ public sealed interface AnalyzedQuery permits
         AnalyzedDescribeTable,
         AnalyzedShowDatabases,
         AnalyzedShowTables,
+        AnalyzedSelect,
+        AnalyzedInsert,
+        AnalyzedUpdate,
+        AnalyzedDelete,
         UnresolvedQuery {
 }

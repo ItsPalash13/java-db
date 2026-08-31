@@ -22,7 +22,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Integration smoke test: real TCP round-trip through handler + query processor (echo stub).
+ * Integration smoke test: real TCP round-trip through handler + query processor.
  * Uses port {@code 0} so the OS assigns an ephemeral listen port.
  */
 class TcpNetworkModuleTest {
@@ -44,7 +44,7 @@ class TcpNetworkModuleTest {
             OutputStream out = new BufferedOutputStream(socket.getOutputStream());
             InputStream in = new BufferedInputStream(socket.getInputStream());
 
-            byte[] request = "SELECT * FROM shop.t".getBytes(StandardCharsets.UTF_8);
+            byte[] request = "CREATE DATABASE shop".getBytes(StandardCharsets.UTF_8);
             out.write(ByteBuffer.allocate(4).putInt(request.length).array());
             out.write(request);
             out.flush();

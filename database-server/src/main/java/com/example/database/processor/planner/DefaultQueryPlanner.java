@@ -6,22 +6,27 @@ import com.example.database.processor.analyser.AnalyzedCheckpoint;
 import com.example.database.processor.analyser.AnalyzedCommit;
 import com.example.database.processor.analyser.AnalyzedCreateDatabase;
 import com.example.database.processor.analyser.AnalyzedCreateIndex;
+import com.example.database.processor.analyser.AnalyzedDelete;
 import com.example.database.processor.analyser.AnalyzedDropIndex;
 import com.example.database.processor.analyser.AnalyzedCreateTable;
 import com.example.database.processor.analyser.AnalyzedDropDatabase;
 import com.example.database.processor.analyser.AnalyzedDropTable;
 import com.example.database.processor.analyser.AnalyzedDescribeTable;
 import com.example.database.processor.analyser.AnalyzedDropColumn;
+import com.example.database.processor.analyser.AnalyzedInsert;
 import com.example.database.processor.analyser.AnalyzedQuery;
 import com.example.database.processor.analyser.AnalyzedRollback;
+import com.example.database.processor.analyser.AnalyzedSelect;
 import com.example.database.processor.analyser.AnalyzedShowDatabases;
 import com.example.database.processor.analyser.AnalyzedShowTables;
+import com.example.database.processor.analyser.AnalyzedUpdate;
 import com.example.database.processor.analyser.UnresolvedQuery;
 
 import java.util.Objects;
 
 /**
- * Maps analyzed DDL onto command plans. Does not read or write catalog or disk.
+ * Maps analyzed DDL onto command plans and DML/DQL onto row plans.
+ * Does not read or write catalog or disk — access path uses indexes already on the analyzed query.
  */
 public final class DefaultQueryPlanner implements QueryPlanner {
 
@@ -77,6 +82,47 @@ public final class DefaultQueryPlanner implements QueryPlanner {
         }
         if (analyzed instanceof AnalyzedShowTables showTables) {
             return new ShowTablesPlan(showTables.database());
+        }
+        if (analyzed instanceof AnalyzedSelect select) {
+            return new SelectPlan(
+                    select.database(),
+                    select.table(),
+                    select.projections(),
+                    select.where().orElse(null),
+                    AccessPathChooser.choose(
+                            select.where().orElse(null),
+                            select.columns(),
+                            select.indexes()
+                    )
+            );
+        }
+        if (analyzed instanceof AnalyzedInsert insert) {
+            return new InsertPlan(insert.database(), insert.table(), insert.values());
+        }
+        if (analyzed instanceof AnalyzedUpdate update) {
+            return new UpdatePlan(
+                    update.database(),
+                    update.table(),
+                    update.assignments(),
+                    update.where().orElse(null),
+                    AccessPathChooser.choose(
+                            update.where().orElse(null),
+                            update.columns(),
+                            update.indexes()
+                    )
+            );
+        }
+        if (analyzed instanceof AnalyzedDelete delete) {
+            return new DeletePlan(
+                    delete.database(),
+                    delete.table(),
+                    delete.where().orElse(null),
+                    AccessPathChooser.choose(
+                            delete.where().orElse(null),
+                            delete.columns(),
+                            delete.indexes()
+                    )
+            );
         }
         if (analyzed instanceof UnresolvedQuery unresolved) {
             return new UnresolvedPlan(unresolved);

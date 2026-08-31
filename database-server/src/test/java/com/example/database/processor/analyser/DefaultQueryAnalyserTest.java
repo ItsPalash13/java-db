@@ -1,16 +1,24 @@
 package com.example.database.processor.analyser;
 
+import com.example.database.processor.lexer.TokenCatalog;
+import com.example.database.processor.parser.ast.Assignment;
 import com.example.database.processor.parser.ast.ColumnDefinition;
 import com.example.database.processor.parser.ast.ColumnSqlType;
 import com.example.database.processor.parser.ast.QualifiedTable;
+import com.example.database.processor.parser.ast.expr.BinaryExpression;
+import com.example.database.processor.parser.ast.expr.ColumnExpression;
+import com.example.database.processor.parser.ast.expr.LiteralExpression;
 import com.example.database.processor.parser.ast.query.AlterTableQuery;
 import com.example.database.processor.parser.ast.query.CreateDatabaseQuery;
 import com.example.database.processor.parser.ast.query.CreateIndexQuery;
 import com.example.database.processor.parser.ast.query.CreateTableQuery;
+import com.example.database.processor.parser.ast.query.DeleteQuery;
 import com.example.database.processor.parser.ast.query.DropDatabaseQuery;
 import com.example.database.processor.parser.ast.query.DropIndexQuery;
 import com.example.database.processor.parser.ast.query.DropTableQuery;
+import com.example.database.processor.parser.ast.query.InsertQuery;
 import com.example.database.processor.parser.ast.query.SelectQuery;
+import com.example.database.processor.parser.ast.query.UpdateQuery;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.ColumnType;
@@ -141,16 +149,221 @@ class DefaultQueryAnalyserTest {
     }
 
     @Test
-    void passesThroughSelectAsUnresolved() {
-        CatalogManager catalog = new DefaultCatalogManager();
+    void acceptsSelectStarWhenTableExistsWithoutMutatingCatalog() {
+        CatalogManager catalog = catalogWithUsers();
         DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
-        SelectQuery select = new SelectQuery(true, List.of(), shopUsers(), null);
 
-        UnresolvedQuery unresolved = assertInstanceOf(
-                UnresolvedQuery.class,
-                analyser.analyse(select)
+        AnalyzedSelect analyzed = assertInstanceOf(
+                AnalyzedSelect.class,
+                analyser.analyse(new SelectQuery(true, List.of(), shopUsers(), null))
         );
-        assertEquals(select, unresolved.source());
+        assertEquals("shop", analyzed.database());
+        assertEquals("users", analyzed.table());
+        assertEquals(2, analyzed.projections().size());
+        assertEquals("id", analyzed.projections().get(0).name().orElseThrow());
+        assertEquals(1, analyzed.projections().get(0).columnId().orElseThrow());
+        assertEquals("name", analyzed.projections().get(1).name().orElseThrow());
+        assertTrue(analyzed.where().isEmpty());
+        assertEquals(1, catalog.allTables().size());
+    }
+
+    @Test
+    void rejectsSelectWhenTableMissing() {
+        CatalogManager catalog = catalogWithShop();
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new SelectQuery(true, List.of(), shopUsers(), null))
+        );
+        assertEquals("table does not exist: shop.users", ex.getMessage());
+    }
+
+    @Test
+    void rejectsSelectUnknownColumn() {
+        CatalogManager catalog = catalogWithUsers();
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new SelectQuery(
+                        false,
+                        List.of(new ColumnExpression("missing")),
+                        shopUsers(),
+                        null
+                ))
+        );
+        assertEquals("column does not exist: missing", ex.getMessage());
+    }
+
+    @Test
+    void rejectsWhereUnknownColumnAndTypeMismatch() {
+        CatalogManager catalog = catalogWithUsers();
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException unknown = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new SelectQuery(
+                        true,
+                        List.of(),
+                        shopUsers(),
+                        new BinaryExpression(
+                                new ColumnExpression("missing"),
+                                TokenCatalog.EQ,
+                                new LiteralExpression(1L)
+                        )
+                ))
+        );
+        assertEquals("column does not exist: missing", unknown.getMessage());
+
+        AnalysisException mismatch = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new SelectQuery(
+                        true,
+                        List.of(),
+                        shopUsers(),
+                        new BinaryExpression(
+                                new ColumnExpression("id"),
+                                TokenCatalog.EQ,
+                                new LiteralExpression("Ada")
+                        )
+                ))
+        );
+        assertEquals("type mismatch: INT vs VARCHAR", mismatch.getMessage());
+    }
+
+    @Test
+    void acceptsInsertMatchingArityAndFillsOmittedNullable() {
+        CatalogManager catalog = catalogWithUsers();
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalyzedInsert full = assertInstanceOf(
+                AnalyzedInsert.class,
+                analyser.analyse(new InsertQuery(
+                        shopUsers(),
+                        List.of(),
+                        List.of(new LiteralExpression(1L), new LiteralExpression("Ada"))
+                ))
+        );
+        assertEquals(2, full.values().size());
+        assertEquals(1, full.values().get(0).value());
+        assertEquals("Ada", full.values().get(1).value());
+
+        AnalyzedInsert partial = assertInstanceOf(
+                AnalyzedInsert.class,
+                analyser.analyse(new InsertQuery(
+                        shopUsers(),
+                        List.of("id"),
+                        List.of(new LiteralExpression(2L))
+                ))
+        );
+        assertEquals(2, partial.values().size());
+        assertEquals(2, partial.values().get(0).value());
+        assertEquals(null, partial.values().get(1).value());
+    }
+
+    @Test
+    void rejectsInsertWrongArityTypeAndNonLiteral() {
+        CatalogManager catalog = catalogWithUsers();
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException arity = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new InsertQuery(
+                        shopUsers(),
+                        List.of(),
+                        List.of(new LiteralExpression(1L))
+                ))
+        );
+        assertEquals("expected 2 values but got 1", arity.getMessage());
+
+        AnalysisException type = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new InsertQuery(
+                        shopUsers(),
+                        List.of(),
+                        List.of(new LiteralExpression("x"), new LiteralExpression("Ada"))
+                ))
+        );
+        assertEquals("type mismatch: expected INT but got VARCHAR", type.getMessage());
+
+        AnalysisException notLiteral = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new InsertQuery(
+                        shopUsers(),
+                        List.of(),
+                        List.of(new ColumnExpression("id"), new LiteralExpression("Ada"))
+                ))
+        );
+        assertEquals("INSERT values must be literals", notLiteral.getMessage());
+    }
+
+    @Test
+    void rejectsInsertOmittedNonNullableColumn() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(
+                        ColumnMetadata.define("id", ColumnType.INT, false),
+                        ColumnMetadata.define("name", ColumnType.VARCHAR)
+                )
+        ));
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new InsertQuery(
+                        shopUsers(),
+                        List.of("name"),
+                        List.of(new LiteralExpression("Ada"))
+                ))
+        );
+        assertEquals("column is not nullable: id", ex.getMessage());
+    }
+
+    @Test
+    void acceptsUpdateAndDeleteWhenTableExists() {
+        CatalogManager catalog = catalogWithUsers();
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalyzedUpdate update = assertInstanceOf(
+                AnalyzedUpdate.class,
+                analyser.analyse(new UpdateQuery(
+                        shopUsers(),
+                        List.of(new Assignment("name", new LiteralExpression("Bob"))),
+                        new BinaryExpression(
+                                new ColumnExpression("id"),
+                                TokenCatalog.EQ,
+                                new LiteralExpression(1L)
+                        )
+                ))
+        );
+        assertEquals(2, update.assignments().get(0).columnId());
+        assertTrue(update.where().isPresent());
+
+        AnalyzedDelete delete = assertInstanceOf(
+                AnalyzedDelete.class,
+                analyser.analyse(new DeleteQuery(shopUsers(), null))
+        );
+        assertEquals("users", delete.table());
+        assertTrue(delete.where().isEmpty());
+    }
+
+    @Test
+    void rejectsUpdateUnknownColumn() {
+        CatalogManager catalog = catalogWithUsers();
+        DefaultQueryAnalyser analyser = new DefaultQueryAnalyser(catalog);
+
+        AnalysisException ex = assertThrows(
+                AnalysisException.class,
+                () -> analyser.analyse(new UpdateQuery(
+                        shopUsers(),
+                        List.of(new Assignment("missing", new LiteralExpression(1L))),
+                        null
+                ))
+        );
+        assertEquals("column does not exist: missing", ex.getMessage());
     }
 
     @Test
@@ -489,6 +702,19 @@ class DefaultQueryAnalyserTest {
 
     private static CreateIndexQuery createIndexQuery() {
         return new CreateIndexQuery("idx_users_id", shopUsers(), List.of("id"));
+    }
+
+    private static CatalogManager catalogWithUsers() {
+        CatalogManager catalog = catalogWithShop();
+        catalog.createTable(TableMetadata.define(
+                "shop",
+                "users",
+                List.of(
+                        ColumnMetadata.define("id", ColumnType.INT),
+                        ColumnMetadata.define("name", ColumnType.VARCHAR)
+                )
+        ));
+        return catalog;
     }
 
     private static CatalogManager catalogWithShop() {

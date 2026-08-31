@@ -4,15 +4,27 @@ import com.example.database.processor.analyser.AnalyzedAddColumn;
 import com.example.database.processor.analyser.AnalyzedCreateDatabase;
 import com.example.database.processor.analyser.AnalyzedCreateIndex;
 import com.example.database.processor.analyser.AnalyzedCreateTable;
+import com.example.database.processor.analyser.AnalyzedDelete;
 import com.example.database.processor.analyser.AnalyzedDropColumn;
 import com.example.database.processor.analyser.AnalyzedDropDatabase;
 import com.example.database.processor.analyser.AnalyzedDropIndex;
 import com.example.database.processor.analyser.AnalyzedDropTable;
+import com.example.database.processor.analyser.AnalyzedInsert;
+import com.example.database.processor.analyser.AnalyzedSelect;
+import com.example.database.processor.analyser.AnalyzedUpdate;
+import com.example.database.processor.analyser.ResolvedAssignment;
+import com.example.database.processor.analyser.ResolvedInsertValue;
+import com.example.database.processor.analyser.ResolvedProjection;
 import com.example.database.processor.analyser.UnresolvedQuery;
+import com.example.database.processor.lexer.TokenCatalog;
 import com.example.database.processor.parser.ast.QualifiedTable;
+import com.example.database.processor.parser.ast.expr.BinaryExpression;
+import com.example.database.processor.parser.ast.expr.ColumnExpression;
+import com.example.database.processor.parser.ast.expr.LiteralExpression;
 import com.example.database.processor.parser.ast.query.SelectQuery;
 import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.ColumnType;
+import com.example.database.storage.catalog.IndexMetadata;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -109,6 +121,90 @@ class DefaultQueryPlannerTest {
                 planner.plan(new AnalyzedDropIndex("shop", "users", "idx_users_id"))
         );
         assertEquals(QueryType.DROP_INDEX, drop.queryType());
+    }
+
+    @Test
+    void plansSelectAsTableScanWithoutMatchingIndex() {
+        ColumnMetadata id = new ColumnMetadata(1, "id", ColumnType.INT, true);
+        ColumnMetadata name = new ColumnMetadata(2, "name", ColumnType.VARCHAR, true);
+        AnalyzedSelect analyzed = new AnalyzedSelect(
+                "shop",
+                "users",
+                List.of(ResolvedProjection.column(id), ResolvedProjection.column(name)),
+                null,
+                List.of(id, name),
+                List.of()
+        );
+
+        SelectPlan plan = assertInstanceOf(SelectPlan.class, planner.plan(analyzed));
+        assertEquals(QueryType.SELECT, plan.queryType());
+        assertEquals("shop", plan.database());
+        assertEquals("users", plan.table());
+        assertEquals(2, plan.projections().size());
+        assertEquals(AccessPath.tableScan(), plan.accessPath());
+    }
+
+    @Test
+    void plansSelectAsIndexScanWhenEqualityMatchesLeadingIndexColumn() {
+        ColumnMetadata id = new ColumnMetadata(1, "id", ColumnType.INT, true);
+        ColumnMetadata name = new ColumnMetadata(2, "name", ColumnType.VARCHAR, true);
+        BinaryExpression where = new BinaryExpression(
+                new ColumnExpression("id"),
+                TokenCatalog.EQ,
+                new LiteralExpression(1L)
+        );
+        AnalyzedSelect analyzed = new AnalyzedSelect(
+                "shop",
+                "users",
+                List.of(ResolvedProjection.column(id)),
+                where,
+                List.of(id, name),
+                List.of(IndexMetadata.define("idx_users_id", List.of(1)))
+        );
+
+        SelectPlan plan = assertInstanceOf(SelectPlan.class, planner.plan(analyzed));
+        assertEquals(AccessPath.indexScan("idx_users_id"), plan.accessPath());
+    }
+
+    @Test
+    void plansInsertUpdateDelete() {
+        ColumnMetadata id = new ColumnMetadata(1, "id", ColumnType.INT, true);
+        InsertPlan insert = assertInstanceOf(
+                InsertPlan.class,
+                planner.plan(new AnalyzedInsert(
+                        "shop",
+                        "users",
+                        List.of(new ResolvedInsertValue(1, ColumnType.INT, 1))
+                ))
+        );
+        assertEquals(QueryType.INSERT, insert.queryType());
+        assertEquals(1, insert.values().get(0).value());
+
+        BinaryExpression where = new BinaryExpression(
+                new ColumnExpression("id"),
+                TokenCatalog.EQ,
+                new LiteralExpression(1L)
+        );
+        UpdatePlan update = assertInstanceOf(
+                UpdatePlan.class,
+                planner.plan(new AnalyzedUpdate(
+                        "shop",
+                        "users",
+                        List.of(new ResolvedAssignment(2, ColumnType.VARCHAR, new LiteralExpression("Bob"))),
+                        where,
+                        List.of(id),
+                        List.of(IndexMetadata.define("idx_users_id", List.of(1)))
+                ))
+        );
+        assertEquals(QueryType.UPDATE, update.queryType());
+        assertEquals(AccessPath.indexScan("idx_users_id"), update.accessPath());
+
+        DeletePlan delete = assertInstanceOf(
+                DeletePlan.class,
+                planner.plan(new AnalyzedDelete("shop", "users", null, List.of(id), List.of()))
+        );
+        assertEquals(QueryType.DELETE, delete.queryType());
+        assertEquals(AccessPath.tableScan(), delete.accessPath());
     }
 
     @Test

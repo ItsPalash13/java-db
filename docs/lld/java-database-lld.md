@@ -127,6 +127,59 @@ classDiagram
         -String database
     }
 
+    class ResolvedProjection {
+        <<concrete>>
+        -OptionalInt columnId
+        -ColumnType type
+        +column(ColumnMetadata) ResolvedProjection
+        +literal(ColumnType, Object) ResolvedProjection
+    }
+
+    class ResolvedInsertValue {
+        <<concrete>>
+        -int columnId
+        -ColumnType type
+        -Object value
+    }
+
+    class ResolvedAssignment {
+        <<concrete>>
+        -int columnId
+        -ColumnType type
+        -Expression value
+    }
+
+    class AnalyzedSelect {
+        <<concrete>>
+        -String database
+        -String table
+        -List~ResolvedProjection~ projections
+        -Expression where
+        -List~IndexMetadata~ indexes
+    }
+
+    class AnalyzedInsert {
+        <<concrete>>
+        -String database
+        -String table
+        -List~ResolvedInsertValue~ values
+    }
+
+    class AnalyzedUpdate {
+        <<concrete>>
+        -String database
+        -String table
+        -List~ResolvedAssignment~ assignments
+        -Expression where
+    }
+
+    class AnalyzedDelete {
+        <<concrete>>
+        -String database
+        -String table
+        -Expression where
+    }
+
     class UnresolvedQuery {
         <<concrete>>
         -AstNode source
@@ -154,6 +207,10 @@ classDiagram
         DESCRIBE_TABLE
         SHOW_DATABASES
         SHOW_TABLES
+        SELECT
+        INSERT
+        UPDATE
+        DELETE
         UNRESOLVED
     }
 
@@ -214,6 +271,44 @@ classDiagram
         -String index
     }
 
+    class AccessPath {
+        <<concrete>>
+        -Kind kind
+        -String indexName
+        +tableScan() AccessPath
+        +indexScan(String) AccessPath
+    }
+
+    class SelectPlan {
+        <<concrete>>
+        -String database
+        -String table
+        -List~ResolvedProjection~ projections
+        -AccessPath accessPath
+    }
+
+    class InsertPlan {
+        <<concrete>>
+        -String database
+        -String table
+        -List~ResolvedInsertValue~ values
+    }
+
+    class UpdatePlan {
+        <<concrete>>
+        -String database
+        -String table
+        -List~ResolvedAssignment~ assignments
+        -AccessPath accessPath
+    }
+
+    class DeletePlan {
+        <<concrete>>
+        -String database
+        -String table
+        -AccessPath accessPath
+    }
+
     class UnresolvedPlan {
         <<concrete>>
         -UnresolvedQuery source
@@ -262,6 +357,11 @@ classDiagram
     class DescribeExecutor {
         <<concrete>>
         -CatalogManager catalogManager
+        +execute(ExecutionPlan plan) QueryResult
+    }
+
+    class DeferredRowExecutor {
+        <<concrete>>
         +execute(ExecutionPlan plan) QueryResult
     }
 
@@ -944,8 +1044,14 @@ classDiagram
     AnalyzedQuery <|.. AnalyzedDescribeTable
     AnalyzedQuery <|.. AnalyzedShowDatabases
     AnalyzedQuery <|.. AnalyzedShowTables
+    AnalyzedQuery <|.. AnalyzedSelect
+    AnalyzedQuery <|.. AnalyzedInsert
+    AnalyzedQuery <|.. AnalyzedUpdate
+    AnalyzedQuery <|.. AnalyzedDelete
     AnalyzedQuery <|.. UnresolvedQuery
-    AnalyzedCreateTable --> ColumnMetadata : columns
+    AnalyzedSelect --> ResolvedProjection : projections
+    AnalyzedInsert --> ResolvedInsertValue : values
+    AnalyzedUpdate --> ResolvedAssignment : assignments
     AnalyzedAddColumn --> ColumnMetadata : column
     QueryPlanner <|.. DefaultQueryPlanner
     ExecutionPlan <|.. CreateTablePlan
@@ -959,6 +1065,10 @@ classDiagram
     ExecutionPlan <|.. DescribeTablePlan
     ExecutionPlan <|.. ShowDatabasesPlan
     ExecutionPlan <|.. ShowTablesPlan
+    ExecutionPlan <|.. SelectPlan
+    ExecutionPlan <|.. InsertPlan
+    ExecutionPlan <|.. UpdatePlan
+    ExecutionPlan <|.. DeletePlan
     ExecutionPlan <|.. UnresolvedPlan
     CreateTablePlan --> ColumnMetadata : columns
     CreateTablePlan --> QueryType
@@ -970,6 +1080,13 @@ classDiagram
     CreateIndexPlan --> QueryType
     DropIndexPlan --> QueryType
     AddColumnPlan --> ColumnMetadata : column
+    SelectPlan --> AccessPath
+    UpdatePlan --> AccessPath
+    DeletePlan --> AccessPath
+    SelectPlan --> QueryType
+    InsertPlan --> QueryType
+    UpdatePlan --> QueryType
+    DeletePlan --> QueryType
     UnresolvedPlan --> UnresolvedQuery : source
     DefaultQueryPlanner ..> AnalyzedCreateTable
     DefaultQueryPlanner ..> AnalyzedCreateDatabase
@@ -979,12 +1096,17 @@ classDiagram
     DefaultQueryPlanner ..> AnalyzedDropColumn
     DefaultQueryPlanner ..> AnalyzedCreateIndex
     DefaultQueryPlanner ..> AnalyzedDropIndex
+    DefaultQueryPlanner ..> AnalyzedSelect
+    DefaultQueryPlanner ..> AnalyzedInsert
+    DefaultQueryPlanner ..> AnalyzedUpdate
+    DefaultQueryPlanner ..> AnalyzedDelete
     QueryDispatcher --> ExecutorRegistry
     ExecutorRegistry --> QueryExecutor
     QueryExecutor <|.. CommandExecutor
     QueryExecutor <|.. TransactionControlExecutor
     QueryExecutor <|.. CheckpointExecutor
     QueryExecutor <|.. DescribeExecutor
+    QueryExecutor <|.. DeferredRowExecutor
     CommandExecutor --> CatalogManager : writes
     DescribeExecutor --> CatalogManager : reads
     CommandExecutor --> TransactionManager : implicit txn / explicit append
@@ -1015,6 +1137,10 @@ classDiagram
     DefaultStorageEngine --> CheckpointScheduler : owns
     ExecutionPlan <|.. CheckpointPlan
     CheckpointExecutor ..> CheckpointPlan
+    DeferredRowExecutor ..> SelectPlan
+    DeferredRowExecutor ..> InsertPlan
+    DeferredRowExecutor ..> UpdatePlan
+    DeferredRowExecutor ..> DeletePlan
     CommandExecutor ..> CreateTablePlan
     CommandExecutor ..> CreateDatabasePlan
     CommandExecutor ..> DropTablePlan
