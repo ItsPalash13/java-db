@@ -15,6 +15,7 @@ import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.IndexMetadata;
 import com.example.database.storage.catalog.TableMetadata;
 import com.example.database.storage.lock.LockManager;
+import com.example.database.storage.table.TableStore;
 import com.example.database.storage.transaction.TransactionManager;
 import com.example.database.storage.wal.WALManager;
 import com.example.database.storage.wal.WalRecord;
@@ -26,7 +27,8 @@ import java.util.Objects;
 /**
  * DDL as a catalog state change, not a Volcano {@code next()} loop.
  * Order: begin txn → catalog lock → append WAL (flush at commit) → catalog work → unlock → commit.
- * Analyser stays lock-free.
+ * DROP TABLE/DATABASE also clears temporary RAM heaps in {@link TableStore} so recreate
+ * does not see stale rows. Analyser stays lock-free.
  */
 public final class CommandExecutor implements QueryExecutor {
 
@@ -34,17 +36,20 @@ public final class CommandExecutor implements QueryExecutor {
     private final TransactionManager transactionManager;
     private final LockManager lockManager;
     private final WALManager walManager;
+    private final TableStore tableStore;
 
     public CommandExecutor(
             CatalogManager catalogManager,
             TransactionManager transactionManager,
             LockManager lockManager,
-            WALManager walManager
+            WALManager walManager,
+            TableStore tableStore
     ) {
         this.catalogManager = Objects.requireNonNull(catalogManager, "catalogManager");
         this.transactionManager = Objects.requireNonNull(transactionManager, "transactionManager");
         this.lockManager = Objects.requireNonNull(lockManager, "lockManager");
         this.walManager = Objects.requireNonNull(walManager, "walManager");
+        this.tableStore = Objects.requireNonNull(tableStore, "tableStore");
     }
 
     @Override
@@ -81,6 +86,8 @@ public final class CommandExecutor implements QueryExecutor {
             if (plan instanceof DropTablePlan dropTable) {
                 log(txnId, WalRecord.dropTable(txnId, dropTable.database(), dropTable.table()));
                 catalogManager.dropTable(dropTable.database(), dropTable.table());
+                // Catalog gone; drop RAM heap so CREATE TABLE same name starts empty.
+                tableStore.dropTable(dropTable.database(), dropTable.table());
                 return QueryResult.ok();
             }
             if (plan instanceof CreateDatabasePlan createDatabase) {
@@ -91,6 +98,7 @@ public final class CommandExecutor implements QueryExecutor {
             if (plan instanceof DropDatabasePlan dropDatabase) {
                 log(txnId, WalRecord.dropDatabase(txnId, dropDatabase.database()));
                 catalogManager.dropDatabase(dropDatabase.database());
+                tableStore.dropDatabase(dropDatabase.database());
                 return QueryResult.ok();
             }
             if (plan instanceof AddColumnPlan addColumn) {

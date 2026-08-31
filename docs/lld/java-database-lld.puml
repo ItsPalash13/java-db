@@ -332,6 +332,7 @@ class CommandExecutor <<concrete>> {
   -transactionManager: TransactionManager
   -lockManager: LockManager
   -walManager: WALManager
+  -tableStore: TableStore
   +execute(plan: ExecutionPlan): QueryResult
 }
 
@@ -340,8 +341,34 @@ class DescribeExecutor <<concrete>> {
   +execute(plan: ExecutionPlan): QueryResult
 }
 
-class DeferredRowExecutor <<concrete>> {
+class VolcanoExecutor <<concrete>> {
+  -tableStore: TableStore
   +execute(plan: ExecutionPlan): QueryResult
+}
+
+class VectorizedExecutor <<concrete>> {
+  +execute(plan: ExecutionPlan): QueryResult
+}
+
+class BatchExecutor <<concrete>> {
+  +execute(plan: ExecutionPlan): QueryResult
+}
+
+class Tuple <<concrete>> {
+  -rowId: long
+  -values: Object[]
+}
+
+class ExpressionEvaluator <<concrete>> {
+  -columnIdsByName: Map<String, Integer>
+  +evaluate(expression: Expression, tuple: Tuple): Object
+  +matches(where: Expression, tuple: Tuple): boolean
+}
+
+interface VolcanoOperator {
+  +open()
+  +next(): Tuple
+  +close()
 }
 
 class ExecutorRegistry <<concrete>> {
@@ -362,6 +389,7 @@ interface StorageEngine {
   +transactionManager(): TransactionManager
   +lockManager(): LockManager
   +walManager(): WALManager
+  +tableStore(): TableStore
 }
 
 class DefaultStorageEngine <<concrete>> {
@@ -372,6 +400,7 @@ class DefaultStorageEngine <<concrete>> {
   -transactionManager: TransactionManager
   -lockManager: LockManager
   -checkpointScheduler: CheckpointScheduler
+  -tableStore: TableStore
   -checkpointEnabled: boolean
   +start()
   +stop()
@@ -380,6 +409,7 @@ class DefaultStorageEngine <<concrete>> {
   +transactionManager(): TransactionManager
   +lockManager(): LockManager
   +walManager(): WALManager
+  +tableStore(): TableStore
 }
 
 class DataDirectory <<concrete>> {
@@ -511,7 +541,21 @@ class JsonCatalogStore <<concrete>> {
   +dropDatabase(name: String)
 }
 
-interface TableStore
+interface TableStore {
+  +insert(database: String, table: String, values: Object[]): Tuple
+  +scan(database: String, table: String): Iterator<Tuple>
+  +update(database: String, table: String, rowId: long, values: Object[])
+  +delete(database: String, table: String, rowId: long)
+  +dropTable(database: String, table: String)
+  +dropDatabase(database: String)
+}
+
+class InMemoryTableStore <<concrete>> {
+  -tables: Map<String, List<Tuple>>
+  -nextRowId: AtomicLong
+  +insert / scan / update / delete / dropTable / dropDatabase
+}
+
 interface IndexStore
 
 interface LockManager {
@@ -965,12 +1009,21 @@ QueryExecutor <|.. CommandExecutor
 QueryExecutor <|.. TransactionControlExecutor
 QueryExecutor <|.. CheckpointExecutor
 QueryExecutor <|.. DescribeExecutor
-QueryExecutor <|.. DeferredRowExecutor
+QueryExecutor <|.. VolcanoExecutor
+QueryExecutor <|.. VectorizedExecutor
+QueryExecutor <|.. BatchExecutor
 CommandExecutor --> CatalogManager : writes
+CommandExecutor --> TableStore : dropTable / dropDatabase
 DescribeExecutor --> CatalogManager : reads
 CommandExecutor --> TransactionManager : implicit txn / explicit append
 CommandExecutor --> LockManager : runExclusiveCatalog
 CommandExecutor --> WALManager : append (flush at commit)
+VolcanoExecutor --> TableStore : DML/DQL
+VolcanoExecutor ..> VolcanoOperator : compiles plan
+VolcanoOperator ..> Tuple
+ExpressionEvaluator ..> Tuple
+TableStore <|.. InMemoryTableStore
+InMemoryTableStore --> Tuple
 TransactionControlExecutor --> TransactionManager : begin/commit/rollback
 CheckpointExecutor --> LockManager : runExclusiveCatalog
 CheckpointExecutor --> WALManager : checkpoint
@@ -996,10 +1049,10 @@ DefaultStorageEngine --> WALManager : owns
 DefaultStorageEngine --> CheckpointScheduler : owns
 ExecutionPlan <|.. CheckpointPlan
 CheckpointExecutor ..> CheckpointPlan
-DeferredRowExecutor ..> SelectPlan
-DeferredRowExecutor ..> InsertPlan
-DeferredRowExecutor ..> UpdatePlan
-DeferredRowExecutor ..> DeletePlan
+VolcanoExecutor ..> SelectPlan
+VolcanoExecutor ..> InsertPlan
+VolcanoExecutor ..> UpdatePlan
+VolcanoExecutor ..> DeletePlan
 CommandExecutor ..> CreateTablePlan
 CommandExecutor ..> CreateDatabasePlan
 CommandExecutor ..> DropTablePlan
@@ -1009,6 +1062,7 @@ CommandExecutor ..> DropColumnPlan
 CommandExecutor ..> CreateIndexPlan
 CommandExecutor ..> DropIndexPlan
 StorageEngine --> TableStore : owns
+DefaultStorageEngine --> InMemoryTableStore : constructs
 StorageEngine --> IndexStore : owns
 StorageEngine --> BufferPool : owns
 DefaultQueryParser --> ParserRegistry

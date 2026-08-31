@@ -8,6 +8,8 @@ import com.example.database.storage.lock.DefaultLockManager;
 import com.example.database.storage.lock.LockManager;
 import com.example.database.storage.physical.DefaultPhysicalStorage;
 import com.example.database.storage.physical.PhysicalStorage;
+import com.example.database.storage.table.InMemoryTableStore;
+import com.example.database.storage.table.TableStore;
 import com.example.database.storage.transaction.DefaultTransactionManager;
 import com.example.database.storage.transaction.TransactionManager;
 import com.example.database.storage.wal.DefaultWALManager;
@@ -28,6 +30,7 @@ public final class DefaultStorageEngine implements StorageEngine {
     private final WALManager walManager;
     private final TransactionManager transactionManager;
     private final LockManager lockManager;
+    private final TableStore tableStore;
     private final CheckpointScheduler checkpointScheduler;
     // From ServerEnvironment: defaults() leaves this false so unit tests do not start a daemon.
     private final boolean checkpointEnabled;
@@ -45,6 +48,8 @@ public final class DefaultStorageEngine implements StorageEngine {
         this.walManager = new DefaultWALManager(physicalStorage);
         this.transactionManager = new DefaultTransactionManager(walManager);
         this.lockManager = new DefaultLockManager(environment.catalogLockWait());
+        // Temporary RAM heaps for Volcano; replaced by a file TableStore later.
+        this.tableStore = new InMemoryTableStore();
         this.checkpointEnabled = environment.checkpointEnabled();
         // Strategy is chosen once at construction (timeout XOR wal_size). SQL CHECKPOINT
         // does not go through this scheduler — CheckpointExecutor calls walManager directly.
@@ -82,6 +87,12 @@ public final class DefaultStorageEngine implements StorageEngine {
     public WALManager walManager() {
         requireStarted();
         return walManager;
+    }
+
+    @Override
+    public TableStore tableStore() {
+        requireStarted();
+        return tableStore;
     }
 
     @Override

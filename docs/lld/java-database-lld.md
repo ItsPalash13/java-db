@@ -351,6 +351,7 @@ classDiagram
         -TransactionManager transactionManager
         -LockManager lockManager
         -WALManager walManager
+        -TableStore tableStore
         +execute(ExecutionPlan plan) QueryResult
     }
 
@@ -360,9 +361,40 @@ classDiagram
         +execute(ExecutionPlan plan) QueryResult
     }
 
-    class DeferredRowExecutor {
+    class VolcanoExecutor {
+        <<concrete>>
+        -TableStore tableStore
+        +execute(ExecutionPlan plan) QueryResult
+    }
+
+    class VectorizedExecutor {
         <<concrete>>
         +execute(ExecutionPlan plan) QueryResult
+    }
+
+    class BatchExecutor {
+        <<concrete>>
+        +execute(ExecutionPlan plan) QueryResult
+    }
+
+    class Tuple {
+        <<concrete>>
+        -long rowId
+        -Object[] values
+    }
+
+    class ExpressionEvaluator {
+        <<concrete>>
+        -Map~String, Integer~ columnIdsByName
+        +evaluate(Expression expression, Tuple tuple) Object
+        +matches(Expression where, Tuple tuple) boolean
+    }
+
+    class VolcanoOperator {
+        <<interface>>
+        +open()
+        +next() Tuple
+        +close()
     }
 
     class ExecutorRegistry {
@@ -386,6 +418,7 @@ classDiagram
         +transactionManager() TransactionManager
         +lockManager() LockManager
         +walManager() WALManager
+        +tableStore() TableStore
     }
 
     class DefaultStorageEngine {
@@ -397,6 +430,7 @@ classDiagram
         -TransactionManager transactionManager
         -LockManager lockManager
         -CheckpointScheduler checkpointScheduler
+        -TableStore tableStore
         -boolean checkpointEnabled
         +start()
         +stop()
@@ -405,6 +439,7 @@ classDiagram
         +transactionManager() TransactionManager
         +lockManager() LockManager
         +walManager() WALManager
+        +tableStore() TableStore
     }
 
     class DataDirectory {
@@ -553,6 +588,19 @@ classDiagram
 
     class TableStore {
         <<interface>>
+        +insert(String database, String table, Object[] values) Tuple
+        +scan(String database, String table) Iterator~Tuple~
+        +update(String database, String table, long rowId, Object[] values)
+        +delete(String database, String table, long rowId)
+        +dropTable(String database, String table)
+        +dropDatabase(String database)
+    }
+
+    class InMemoryTableStore {
+        <<concrete>>
+        -Map~String, List~Tuple~~ tables
+        -AtomicLong nextRowId
+        +insert / scan / update / delete / dropTable / dropDatabase
     }
 
     class IndexStore {
@@ -1106,12 +1154,21 @@ classDiagram
     QueryExecutor <|.. TransactionControlExecutor
     QueryExecutor <|.. CheckpointExecutor
     QueryExecutor <|.. DescribeExecutor
-    QueryExecutor <|.. DeferredRowExecutor
+    QueryExecutor <|.. VolcanoExecutor
+    QueryExecutor <|.. VectorizedExecutor
+    QueryExecutor <|.. BatchExecutor
     CommandExecutor --> CatalogManager : writes
+    CommandExecutor --> TableStore : dropTable / dropDatabase
     DescribeExecutor --> CatalogManager : reads
     CommandExecutor --> TransactionManager : implicit txn / explicit append
     CommandExecutor --> LockManager : runExclusiveCatalog
     CommandExecutor --> WALManager : append (flush at commit)
+    VolcanoExecutor --> TableStore : DML/DQL
+    VolcanoExecutor ..> VolcanoOperator : compiles plan
+    VolcanoOperator ..> Tuple
+    ExpressionEvaluator ..> Tuple
+    TableStore <|.. InMemoryTableStore
+    InMemoryTableStore --> Tuple
     TransactionControlExecutor --> TransactionManager : begin/commit/rollback
     CheckpointExecutor --> LockManager : runExclusiveCatalog
     CheckpointExecutor --> WALManager : checkpoint
@@ -1137,10 +1194,10 @@ classDiagram
     DefaultStorageEngine --> CheckpointScheduler : owns
     ExecutionPlan <|.. CheckpointPlan
     CheckpointExecutor ..> CheckpointPlan
-    DeferredRowExecutor ..> SelectPlan
-    DeferredRowExecutor ..> InsertPlan
-    DeferredRowExecutor ..> UpdatePlan
-    DeferredRowExecutor ..> DeletePlan
+    VolcanoExecutor ..> SelectPlan
+    VolcanoExecutor ..> InsertPlan
+    VolcanoExecutor ..> UpdatePlan
+    VolcanoExecutor ..> DeletePlan
     CommandExecutor ..> CreateTablePlan
     CommandExecutor ..> CreateDatabasePlan
     CommandExecutor ..> DropTablePlan
@@ -1150,6 +1207,7 @@ classDiagram
     CommandExecutor ..> CreateIndexPlan
     CommandExecutor ..> DropIndexPlan
     StorageEngine --> TableStore : owns
+    DefaultStorageEngine --> InMemoryTableStore : constructs
     StorageEngine --> IndexStore : owns
     StorageEngine --> BufferPool : owns
     DefaultQueryParser --> ParserRegistry

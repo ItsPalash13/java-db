@@ -42,7 +42,8 @@ class QueryDispatcherTest {
                         catalog,
                         new DefaultTransactionManager(wal),
                         new DefaultLockManager(),
-                        wal
+                        wal,
+                        new com.example.database.storage.table.InMemoryTableStore()
                 )
         );
         QueryDispatcher dispatcher = new QueryDispatcher(registry);

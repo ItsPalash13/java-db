@@ -338,7 +338,8 @@ ExecutionException
 <<interface>>
 QueryExecutor
 + execute(plan: ExecutionPlan): QueryResult
-    // DDL → CommandExecutor; DML/DQL → DeferredRowExecutor until Volcano
+    // DDL → CommandExecutor; DML/DQL → VolcanoExecutor
+    // VectorizedExecutor / BatchExecutor exist but are not registered
 
 
 <<concrete>>
@@ -347,17 +348,57 @@ CommandExecutor
 - transactionManager: TransactionManager
 - lockManager: LockManager
 - walManager: WALManager
+- tableStore: TableStore
 + execute(plan: ExecutionPlan): QueryResult
     // begin txn → catalog lock → append+flush WAL → catalog write → unlock → commit
     // CREATE_TABLE / DROP_TABLE / CREATE_DATABASE / DROP_DATABASE / ADD_COLUMN / DROP_COLUMN / CREATE_INDEX / DROP_INDEX
+    // DROP TABLE/DATABASE also clears TableStore heaps so recreate does not see stale RAM rows
     // writes catalog; not Volcano
 
 
 <<concrete>>
-DeferredRowExecutor
+VolcanoExecutor
+- tableStore: TableStore
 + execute(plan: ExecutionPlan): QueryResult
-    // SELECT / INSERT / UPDATE / DELETE placeholder until Volcano
-    // returns OK; ignores access path; not wired to TableStore
+    // SELECT / INSERT / UPDATE / DELETE via pull-iterator operators over TableStore
+    // Plans stay declarative; operators (SeqScan/Filter/Project/Insert/Update/Delete) are an implementation detail
+    // INDEX_SCAN treated as SeqScan until IndexStore / B+Tree
+
+
+<<concrete>>
+VectorizedExecutor
++ execute(plan: ExecutionPlan): QueryResult
+    // empty stub; throws ExecutionException; not registered in DefaultQueryProcessor
+
+
+<<concrete>>
+BatchExecutor
++ execute(plan: ExecutionPlan): QueryResult
+    // empty stub; throws ExecutionException; not registered in DefaultQueryProcessor
+
+
+<<concrete>>
+Tuple
+- rowId: long
+- values: Object[]   // indexed by columnId − 1
++ rowId() / values() / get(columnId) / withValues(newValues)
+
+
+<<concrete>>
+ExpressionEvaluator
+- columnIdsByName: Map<String, Integer>
++ evaluate(expression: Expression, tuple: Tuple): Object
++ matches(where: Expression, tuple: Tuple): boolean
+    // Column / Literal / Binary (= != > < >= <=); BOOLEAN only = / !=
+
+
+<<interface>>
+VolcanoOperator
++ open()
++ next(): Tuple   // null when exhausted
++ close()
+    // SeqScan, Filter, Project, InsertOperator, UpdateOperator, DeleteOperator
+    // compiled inside VolcanoExecutor; not ExecutionPlan types
 
 
 <<concrete>>
@@ -410,8 +451,9 @@ StorageEngine
 + transactionManager(): TransactionManager   // requires start(); throws if not started
 + lockManager(): LockManager   // requires start(); throws if not started
 + walManager(): WALManager   // requires start(); throws if not started
-owns (wired): CatalogManager, PhysicalStorage, TransactionManager, LockManager, WALManager, CheckpointScheduler
-owns (stubs, not wired): TableStore, IndexStore, BufferPool
++ tableStore(): TableStore   // requires start(); throws if not started
+owns (wired): CatalogManager, PhysicalStorage, TransactionManager, LockManager, WALManager, CheckpointScheduler, TableStore (InMemoryTableStore)
+owns (stubs, not wired): IndexStore, BufferPool
 
 
 <<interface>>
@@ -515,7 +557,22 @@ duplicate database / missing database / database not empty / missing table
 
 <<interface>>
 TableStore
-owns actual table data
+owns actual table data (rows); does not own schema (CatalogManager)
++ insert(database: String, table: String, values: Object[]): Tuple
++ scan(database: String, table: String): Iterator<Tuple>
++ update(database: String, table: String, rowId: long, values: Object[])
++ delete(database: String, table: String, rowId: long)
++ dropTable(database: String, table: String)
++ dropDatabase(database: String)
+
+
+<<concrete>>
+InMemoryTableStore
+- tables: Map<String, List<Tuple>>   // key "shop.users"
+- nextRowId: AtomicLong
++ insert / scan / update / delete / dropTable / dropDatabase
+    // temporary RAM heaps; lost on restart; not WAL-logged
+    // FileTableStore / pages later
 
 
 <<interface>>
@@ -707,6 +764,7 @@ DefaultStorageEngine
 - transactionManager: TransactionManager
 - lockManager: LockManager
 - checkpointScheduler: CheckpointScheduler
+- tableStore: TableStore   // InMemoryTableStore
 - checkpointEnabled: boolean
 + start()                 // load catalog, replay WAL, seed txnId, optionally start CheckpointScheduler
 + stop()                  // stop CheckpointScheduler
@@ -715,6 +773,7 @@ DefaultStorageEngine
 + transactionManager(): TransactionManager
 + lockManager(): LockManager
 + walManager(): WALManager
++ tableStore(): TableStore
 
 
 <<concrete>>
@@ -1011,9 +1070,10 @@ DatabaseServer
       │              ├── LockManager → DefaultLockManager (catalog exclusive)
       │              ├── WALManager → DefaultWALManager (wal.log + wal.checkpoint)
       │              ├── CheckpointScheduler → CheckpointStrategy (timeout | wal_size)
-      │              │         └── CommandExecutor: txn → lock → WAL append+flush → CatalogManager
+      │              │         └── CommandExecutor: txn → lock → WAL append+flush → CatalogManager (+ TableStore drop)
       │              │         └── CheckpointExecutor: CHECKPOINT → lock → walManager.checkpoint()
-      │              └── (later) TableStore, IndexStore, BufferPool
+      │              ├── TableStore → InMemoryTableStore (RAM rows; temporary)
+      │              └── (later) IndexStore, BufferPool
       ├── uses ▶ QueryProcessor
       │              │
       │              └── DefaultQueryProcessor coordinates
@@ -1026,7 +1086,7 @@ DatabaseServer
       │                        │         ├── BEGIN / COMMIT / ROLLBACK → TransactionControlExecutor
       │                        │         ├── CHECKPOINT → CheckpointExecutor
       │                        │         ├── DESCRIBE_TABLE / SHOW_DATABASES / SHOW_TABLES → DescribeExecutor (catalog read only)
-      │                        │         └── SELECT / INSERT / UPDATE / DELETE → DeferredRowExecutor (until Volcano)
+      │                        │         └── SELECT / INSERT / UPDATE / DELETE → VolcanoExecutor (TableStore)
       │                        │              ├── ParserRegistry → Select/Update/Insert/Delete/Create/Alter/DropParser
       │                        │              └── AstNode (Query / Expression)
       │                        └── uses ▶ StorageEngine (shared)
@@ -1041,7 +1101,7 @@ DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProces
 NetworkModule owns RequestHandler.
 Wire protocol v1: request frame = plain UTF-8 SQL; response frame = JSON WireResponse (see docs/protocol/wire-protocol.md). QueryProcessor returns QueryResult; DefaultRequestHandler calls result.toWireResponse() (Ok, Error, or ResultSet+Done). executeText() / toResponse() remain for tests and logging.
 DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryPlanner; builds DefaultQueryAnalyser and QueryDispatcher on first catalog use from StorageEngine managers (requires start()). Uses StorageEngine (does not own its lifecycle).
-execute() lexes, parses, analyses, plans, then runs plans through QueryDispatcher. Implicit DDL: TransactionManager.runInTransaction → LockManager.runExclusiveCatalog → WAL append (txnId) → CatalogManager → COMMIT+flush. Explicit BEGIN: TransactionControlExecutor holds lock, defer catalog persist until COMMIT. CHECKPOINT: CheckpointExecutor → exclusive catalog → WALManager.checkpoint() (update wal.checkpoint, append CHECKPOINT to wal.log — append-only); refused inside explicit txn. Background CheckpointScheduler plugs one CheckpointStrategy (timeout or wal_size) when CHECKPOINT_ENABLED. DESCRIBE / SHOW DATABASES / SHOW TABLES read CatalogManager only (no txn, lock, or WAL). Table names are database.table. SELECT / INSERT / UPDATE / DELETE are analysed and planned (table vs index scan from catalog IndexMetadata); DeferredRowExecutor returns OK until Volcano. Unresolved plans still echo OK <query>.
+execute() lexes, parses, analyses, plans, then runs plans through QueryDispatcher. Implicit DDL: TransactionManager.runInTransaction → LockManager.runExclusiveCatalog → WAL append (txnId) → CatalogManager → COMMIT+flush. Explicit BEGIN: TransactionControlExecutor holds lock, defer catalog persist until COMMIT. CHECKPOINT: CheckpointExecutor → exclusive catalog → WALManager.checkpoint() (update wal.checkpoint, append CHECKPOINT to wal.log — append-only); refused inside explicit txn. Background CheckpointScheduler plugs one CheckpointStrategy (timeout or wal_size) when CHECKPOINT_ENABLED. DESCRIBE / SHOW DATABASES / SHOW TABLES read CatalogManager only (no txn, lock, or WAL). Table names are database.table. SELECT / INSERT / UPDATE / DELETE are analysed and planned (table vs index scan from catalog IndexMetadata); VolcanoExecutor compiles plans into pull operators over InMemoryTableStore (INDEX_SCAN = SeqScan until B+Tree). Empty SELECT returns a result set with zero rows (executeText still "OK"). Rows are RAM-only — restart keeps catalog, SELECT is empty. DROP TABLE/DATABASE clears store heaps via CommandExecutor. VectorizedExecutor / BatchExecutor exist as stubs but are not registered. Unresolved plans still echo OK <query>.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.processor.lexer (unchanged names).
 Parser types live under com.example.database.processor.parser.
@@ -1053,7 +1113,7 @@ database-client is a separate Maven module: DatabaseClient REPL over the same le
 
 Catalog (Phase 1.1–1.3):
 CatalogManager is a StorageEngine submodule and owns CatalogStore.
-DefaultStorageEngine constructs PhysicalStorage, DefaultCatalogManager, DefaultWALManager, DefaultTransactionManager(wal), DefaultLockManager, and CheckpointScheduler (strategy from ServerEnvironment). start() loads catalog, replays WAL (COMMIT-gated; merges wal.checkpoint maxTxnId), seeds next txnId, starts scheduler if enabled.
+DefaultStorageEngine constructs PhysicalStorage, DefaultCatalogManager, DefaultWALManager, DefaultTransactionManager(wal), DefaultLockManager, CheckpointScheduler (strategy from ServerEnvironment), and InMemoryTableStore. start() loads catalog, replays WAL (COMMIT-gated; merges wal.checkpoint maxTxnId), seeds next txnId, starts scheduler if enabled.
 start() calls catalogManager.load() — the engine does not touch catalog files.
 createTable assigns ids and writes data/<db>/<table>/catalog.json. Restart: new engine, start, getTable("shop","users").
 CREATE DATABASE creates data/<name>/; DROP DATABASE removes an empty directory (fails if tables remain). load() lists those directories and per-table catalogs.

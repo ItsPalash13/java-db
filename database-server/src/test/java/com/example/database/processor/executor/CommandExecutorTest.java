@@ -220,7 +220,8 @@ class CommandExecutorTest {
                 catalog,
                 new DefaultTransactionManager(wal),
                 new DefaultLockManager(),
-                wal
+                wal,
+                new com.example.database.storage.table.InMemoryTableStore()
         );
     }
 }

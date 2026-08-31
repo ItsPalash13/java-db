@@ -34,11 +34,77 @@ class DefaultQueryProcessorTest {
     }
 
     @Test
-    void executeSelectAfterCreateTableReturnsOkFromDeferredExecutor() {
+    void executeSelectAfterCreateTableReturnsEmptyResultSet() {
         DefaultQueryProcessor processor = newProcessor();
         assertEquals("OK", processor.executeText("CREATE DATABASE shop"));
         assertEquals("OK", processor.executeText("CREATE TABLE shop.users (id INT, name VARCHAR)"));
-        assertEquals("OK", processor.executeText("SELECT * FROM shop.users"));
+
+        QueryResult select = processor.execute("SELECT * FROM shop.users");
+        assertTrue(select.hasResultSet());
+        assertEquals("OK", select.toResponse());
+        assertEquals(List.of(), resultSetRows(select));
+    }
+
+    @Test
+    void executeInsertSelectUpdateDeleteRoundTrip() {
+        DefaultQueryProcessor processor = newProcessor();
+        assertEquals("OK", processor.executeText("CREATE DATABASE shop"));
+        assertEquals("OK", processor.executeText("CREATE TABLE shop.users (id INT, name VARCHAR)"));
+
+        assertEquals("OK", processor.executeText("INSERT INTO shop.users VALUES (1, 'Ada')"));
+        assertEquals("OK", processor.executeText("INSERT INTO shop.users VALUES (2, 'Bob')"));
+
+        QueryResult all = processor.execute("SELECT * FROM shop.users");
+        assertTrue(all.hasResultSet());
+        assertEquals(
+                List.of(List.of(1, "Ada"), List.of(2, "Bob")),
+                resultSetRows(all)
+        );
+
+        QueryResult filtered = processor.execute("SELECT name FROM shop.users WHERE id = 1");
+        assertEquals(List.of(List.of("Ada")), resultSetRows(filtered));
+
+        assertEquals("OK", processor.executeText("UPDATE shop.users SET name = 'Ada Lovelace' WHERE id = 1"));
+        assertEquals(
+                List.of(List.of("Ada Lovelace")),
+                resultSetRows(processor.execute("SELECT name FROM shop.users WHERE id = 1"))
+        );
+
+        assertEquals("OK", processor.executeText("DELETE FROM shop.users WHERE id = 2"));
+        assertEquals(
+                List.of(List.of(1, "Ada Lovelace")),
+                resultSetRows(processor.execute("SELECT * FROM shop.users"))
+        );
+    }
+
+    @Test
+    void executeDropTableClearsInMemoryRowsBeforeRecreate() {
+        DefaultQueryProcessor processor = newProcessor();
+        assertEquals("OK", processor.executeText("CREATE DATABASE shop"));
+        assertEquals("OK", processor.executeText("CREATE TABLE shop.users (id INT, name VARCHAR)"));
+        assertEquals("OK", processor.executeText("INSERT INTO shop.users VALUES (1, 'Ada')"));
+
+        assertEquals("OK", processor.executeText("DROP TABLE shop.users"));
+        assertEquals("OK", processor.executeText("CREATE TABLE shop.users (id INT, name VARCHAR)"));
+
+        QueryResult select = processor.execute("SELECT * FROM shop.users");
+        assertTrue(select.hasResultSet());
+        assertEquals(List.of(), resultSetRows(select));
+    }
+
+    @Test
+    void executeSelectEmptyAfterRestartDocumentsTemporaryStore() {
+        DefaultQueryProcessor first = newProcessor();
+        assertEquals("OK", first.executeText("CREATE DATABASE shop"));
+        assertEquals("OK", first.executeText("CREATE TABLE shop.users (id INT, name VARCHAR)"));
+        assertEquals("OK", first.executeText("INSERT INTO shop.users VALUES (1, 'Ada')"));
+
+        StorageEngine restarted = new DefaultStorageEngine(new DataDirectory(dataDir));
+        restarted.start();
+        DefaultQueryProcessor second = new DefaultQueryProcessor(restarted);
+        assertTrue(second.storageEngine().catalogManager().tableExists("shop", "users"));
+        // InMemoryTableStore is not durable — catalog survives; rows do not.
+        assertEquals(List.of(), resultSetRows(second.execute("SELECT * FROM shop.users")));
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.example.database.storage;
 
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.lock.LockManager;
+import com.example.database.storage.table.TableStore;
 import com.example.database.storage.transaction.TransactionManager;
 import com.example.database.storage.wal.WALManager;
 
@@ -18,7 +19,7 @@ import com.example.database.storage.wal.WALManager;
  *   LockManager         catalog exclusive locks for DDL (wired)
  *   WALManager          durable catalog DDL logging + replay + checkpoint (wired)
  *   CheckpointScheduler background timeout/size triggers (wired when enabled)
- *   TableStore          actual table data (later)
+ *   TableStore          row heaps (InMemoryTableStore today; file store later)
  *   IndexStore          index structures (later)
  *   BufferPool          cached persistent blocks/pages (later)
  * </pre>
@@ -61,4 +62,11 @@ public interface StorageEngine {
      * @throws IllegalStateException if storage is not started
      */
     WALManager walManager();
+
+    /**
+     * Row store for DML/DQL. Temporary in-memory heaps until Page / BufferPool exist.
+     *
+     * @throws IllegalStateException if storage is not started
+     */
+    TableStore tableStore();
 }

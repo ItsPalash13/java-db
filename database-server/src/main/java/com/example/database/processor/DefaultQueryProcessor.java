@@ -6,13 +6,13 @@ import com.example.database.processor.analyser.DefaultQueryAnalyser;
 import com.example.database.processor.analyser.QueryAnalyser;
 import com.example.database.processor.executor.CheckpointExecutor;
 import com.example.database.processor.executor.CommandExecutor;
-import com.example.database.processor.executor.DeferredRowExecutor;
 import com.example.database.processor.executor.DescribeExecutor;
 import com.example.database.processor.executor.ExecutionException;
 import com.example.database.processor.executor.ExecutorRegistry;
 import com.example.database.processor.executor.QueryDispatcher;
 import com.example.database.processor.executor.QueryResult;
 import com.example.database.processor.executor.TransactionControlExecutor;
+import com.example.database.processor.executor.engine.volcano.VolcanoExecutor;
 import com.example.database.processor.lexer.DefaultQueryLexer;
 import com.example.database.processor.lexer.LexException;
 import com.example.database.processor.lexer.QueryLexer;
@@ -37,7 +37,7 @@ import java.util.Objects;
 
 /**
  * Lex → parse → analyse → plan → execute. DDL writes the catalog; DESCRIBE/SHOW read it.
- * SELECT/INSERT/UPDATE/DELETE are planned then acknowledged by {@link DeferredRowExecutor}.
+ * SELECT/INSERT/UPDATE/DELETE run through {@link VolcanoExecutor} over TableStore.
  */
 public final class DefaultQueryProcessor implements QueryProcessor {
 
@@ -138,7 +138,8 @@ public final class DefaultQueryProcessor implements QueryProcessor {
                     storageEngine.catalogManager(),
                     storageEngine.transactionManager(),
                     storageEngine.lockManager(),
-                    storageEngine.walManager()
+                    storageEngine.walManager(),
+                    storageEngine.tableStore()
             );
             TransactionControlExecutor transactionControl = new TransactionControlExecutor(
                     storageEngine.transactionManager(),
@@ -151,7 +152,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
                     storageEngine.transactionManager()
             );
             DescribeExecutor describe = new DescribeExecutor(storageEngine.catalogManager());
-            DeferredRowExecutor deferredRows = new DeferredRowExecutor();
+            VolcanoExecutor volcano = new VolcanoExecutor(storageEngine.tableStore());
             registry.register(QueryType.CREATE_TABLE, commands);
             registry.register(QueryType.DROP_TABLE, commands);
             registry.register(QueryType.CREATE_DATABASE, commands);
@@ -167,10 +168,10 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             registry.register(QueryType.DESCRIBE_TABLE, describe);
             registry.register(QueryType.SHOW_DATABASES, describe);
             registry.register(QueryType.SHOW_TABLES, describe);
-            registry.register(QueryType.SELECT, deferredRows);
-            registry.register(QueryType.INSERT, deferredRows);
-            registry.register(QueryType.UPDATE, deferredRows);
-            registry.register(QueryType.DELETE, deferredRows);
+            registry.register(QueryType.SELECT, volcano);
+            registry.register(QueryType.INSERT, volcano);
+            registry.register(QueryType.UPDATE, volcano);
+            registry.register(QueryType.DELETE, volcano);
             queryDispatcher = new QueryDispatcher(registry);
         }
         return queryDispatcher;

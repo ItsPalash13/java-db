@@ -89,6 +89,7 @@ public final class DefaultQueryPlanner implements QueryPlanner {
                     select.table(),
                     select.projections(),
                     select.where().orElse(null),
+                    select.columns(),
                     AccessPathChooser.choose(
                             select.where().orElse(null),
                             select.columns(),
@@ -105,6 +106,7 @@ public final class DefaultQueryPlanner implements QueryPlanner {
                     update.table(),
                     update.assignments(),
                     update.where().orElse(null),
+                    update.columns(),
                     AccessPathChooser.choose(
                             update.where().orElse(null),
                             update.columns(),
@@ -117,6 +119,7 @@ public final class DefaultQueryPlanner implements QueryPlanner {
                     delete.database(),
                     delete.table(),
                     delete.where().orElse(null),
+                    delete.columns(),
                     AccessPathChooser.choose(
                             delete.where().orElse(null),
                             delete.columns(),
