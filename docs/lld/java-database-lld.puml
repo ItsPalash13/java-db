@@ -1,0 +1,940 @@
+@startuml
+' Java Database LLD — one class diagram.
+' Same model as java-database-lld.md (Mermaid) and java-database-lld.txt.
+' Preview this file with the PlantUML extension.
+
+hide circle
+hide empty members
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam ArrowColor #4b5563
+skinparam linetype polyline
+
+skinparam interface {
+  BackgroundColor #dbeafe
+  BorderColor #3b82f6
+}
+
+skinparam class<<concrete>> {
+  BackgroundColor #fef3c7
+  BorderColor #d97706
+}
+
+skinparam enum {
+  BackgroundColor #ede9fe
+  BorderColor #7c3aed
+}
+
+skinparam class<<exception>> {
+  BackgroundColor #fecaca
+  BorderColor #dc2626
+}
+
+skinparam class<<sealed>> {
+  BackgroundColor #fef3c7
+  BorderColor #d97706
+}
+
+class DatabaseServer <<concrete>> {
+  -storageEngine: StorageEngine
+  -networkModule: NetworkModule
+  -queryProcessor: QueryProcessor
+  +start()
+  +stop()
+}
+
+interface NetworkModule {
+  +start()
+  +stop()
+}
+
+interface RequestHandler {
+  +handle(request: Request): Response
+}
+
+class DefaultRequestHandler <<concrete>> {
+  -queryProcessor: QueryProcessor
+  +handle(request: Request): Response
+}
+
+interface QueryProcessor {
+  +execute(query: String): QueryResult
+  +executeText(query: String): String
+  +endConnectionSession()
+}
+
+class DefaultQueryProcessor <<concrete>> {
+  -lexer: QueryLexer
+  -parser: QueryParser
+  -planner: QueryPlanner
+  -queryDispatcher: QueryDispatcher
+  -storageEngine: StorageEngine
+  +execute(query: String): QueryResult
+}
+
+interface QueryAnalyser {
+  +analyse(ast: AstNode): AnalyzedQuery
+}
+
+class DefaultQueryAnalyser <<concrete>> {
+  -catalogManager: CatalogManager
+  +analyse(ast: AstNode): AnalyzedQuery
+}
+
+interface AnalyzedQuery
+
+class AnalyzedCreateTable <<concrete>> {
+  -database: String
+  -table: String
+  -columns: List<ColumnMetadata>
+}
+
+class AnalyzedCreateDatabase <<concrete>> {
+  -database: String
+}
+
+class AnalyzedDropTable <<concrete>> {
+  -database: String
+  -table: String
+}
+
+class AnalyzedDropDatabase <<concrete>> {
+  -database: String
+}
+
+class AnalyzedAddColumn <<concrete>> {
+  -database: String
+  -table: String
+  -column: ColumnMetadata
+}
+
+class AnalyzedDropColumn <<concrete>> {
+  -database: String
+  -table: String
+  -column: String
+}
+
+class AnalyzedCreateIndex <<concrete>> {
+  -database: String
+  -table: String
+  -index: String
+  -columnIds: List<Integer>
+}
+
+class AnalyzedDropIndex <<concrete>> {
+  -database: String
+  -table: String
+  -index: String
+}
+
+class AnalyzedDescribeTable <<concrete>> {
+  -database: String
+  -table: String
+}
+
+class AnalyzedShowDatabases <<concrete>>
+
+class AnalyzedShowTables <<concrete>> {
+  -database: String
+}
+
+class UnresolvedQuery <<concrete>> {
+  -source: AstNode
+}
+
+class AnalysisException <<exception>> {
+  +toResponse(): String
+}
+
+enum QueryType {
+  CREATE_TABLE
+  DROP_TABLE
+  CREATE_DATABASE
+  DROP_DATABASE
+  ADD_COLUMN
+  DROP_COLUMN
+  CREATE_INDEX
+  DROP_INDEX
+  BEGIN
+  COMMIT
+  ROLLBACK
+  CHECKPOINT
+  DESCRIBE_TABLE
+  SHOW_DATABASES
+  SHOW_TABLES
+  UNRESOLVED
+}
+
+interface ExecutionPlan {
+  +queryType(): QueryType
+}
+
+class CreateTablePlan <<concrete>> {
+  -database: String
+  -table: String
+  -columns: List<ColumnMetadata>
+}
+
+class CreateDatabasePlan <<concrete>> {
+  -database: String
+}
+
+class DropTablePlan <<concrete>> {
+  -database: String
+  -table: String
+}
+
+class DropDatabasePlan <<concrete>> {
+  -database: String
+}
+
+class AddColumnPlan <<concrete>> {
+  -database: String
+  -table: String
+  -column: ColumnMetadata
+}
+
+class DropColumnPlan <<concrete>> {
+  -database: String
+  -table: String
+  -column: String
+}
+
+class CreateIndexPlan <<concrete>> {
+  -database: String
+  -table: String
+  -index: String
+  -columnIds: List<Integer>
+}
+
+class DropIndexPlan <<concrete>> {
+  -database: String
+  -table: String
+  -index: String
+}
+
+class DescribeTablePlan <<concrete>>
+class ShowDatabasesPlan <<concrete>>
+class ShowTablesPlan <<concrete>>
+
+class UnresolvedPlan <<concrete>> {
+  -source: UnresolvedQuery
+}
+
+interface QueryPlanner {
+  +plan(analyzed: AnalyzedQuery): ExecutionPlan
+}
+
+class DefaultQueryPlanner <<concrete>> {
+  +plan(analyzed: AnalyzedQuery): ExecutionPlan
+}
+
+class QueryResult <<concrete>> {
+  +ok(): QueryResult
+  +okEcho(message: String): QueryResult
+  +error(message: String): QueryResult
+  +resultSet(columns, rows): QueryResult
+  +hasResultSet(): boolean
+  +toResponse(): String
+  +toWireResponse(): WireResponse
+}
+
+class ExecutionException <<exception>> {
+  +toResponse(): String
+}
+
+interface QueryExecutor {
+  +execute(plan: ExecutionPlan): QueryResult
+}
+
+class CommandExecutor <<concrete>> {
+  -catalogManager: CatalogManager
+  -transactionManager: TransactionManager
+  -lockManager: LockManager
+  -walManager: WALManager
+  +execute(plan: ExecutionPlan): QueryResult
+}
+
+class DescribeExecutor <<concrete>> {
+  -catalogManager: CatalogManager
+  +execute(plan: ExecutionPlan): QueryResult
+}
+
+class ExecutorRegistry <<concrete>> {
+  +register(type: QueryType, executor: QueryExecutor)
+  +get(type: QueryType): QueryExecutor
+}
+
+class QueryDispatcher <<concrete>> {
+  -registry: ExecutorRegistry
+  +execute(plan: ExecutionPlan): QueryResult
+}
+
+interface StorageEngine {
+  +start()
+  +stop()
+  +dataDirectory(): DataDirectory
+  +catalogManager(): CatalogManager
+  +transactionManager(): TransactionManager
+  +lockManager(): LockManager
+  +walManager(): WALManager
+}
+
+class DefaultStorageEngine <<concrete>> {
+  -dataDirectory: DataDirectory
+  -physicalStorage: PhysicalStorage
+  -catalogManager: DefaultCatalogManager
+  -walManager: WALManager
+  -transactionManager: TransactionManager
+  -lockManager: LockManager
+  -checkpointScheduler: CheckpointScheduler
+  -checkpointEnabled: boolean
+  +start()
+  +stop()
+  +dataDirectory(): DataDirectory
+  +catalogManager(): CatalogManager
+  +transactionManager(): TransactionManager
+  +lockManager(): LockManager
+  +walManager(): WALManager
+}
+
+class DataDirectory <<concrete>> {
+  -root: Path
+  +defaults(): DataDirectory
+  +root(): Path
+  +ensureExists()
+}
+
+interface PhysicalStorage {
+  +pageSize(): int
+  +create(file: String)
+  +delete(file: String)
+  +exists(file: String): boolean
+  +read(file: String): byte[]
+  +write(file: String, bytes: byte[])
+  +read(file: String, offset: long, length: int): byte[]
+  +write(file: String, offset: long, bytes: byte[])
+  +flush(file: String)
+  +createDirectory(path: String)
+  +deleteDirectory(path: String)
+  +listDirectories(path: String): List<String>
+}
+
+class DefaultPhysicalStorage <<concrete>> {
+  -root: Path
+  -pageSize: int
+  +pageSize(): int
+  +create(file: String)
+  +delete(file: String)
+  +exists(file: String): boolean
+  +read(file: String): byte[]
+  +write(file: String, bytes: byte[])
+  +read(file: String, offset: long, length: int): byte[]
+  +write(file: String, offset: long, bytes: byte[])
+  +flush(file: String)
+  +createDirectory(path: String)
+  +deleteDirectory(path: String)
+  +listDirectories(path: String): List<String>
+}
+
+class PhysicalStorageException <<exception>>
+
+interface CatalogManager {
+  +getTable(database: String, table: String): Optional<TableMetadata>
+  +tableExists(database: String, table: String): boolean
+  +createTable(table: TableMetadata): TableMetadata
+  +dropTable(database: String, table: String)
+  +addColumn(database: String, table: String, column: ColumnMetadata): TableMetadata
+  +dropColumn(database: String, table: String, column: String): TableMetadata
+  +createIndex(database: String, table: String, index: IndexMetadata): TableMetadata
+  +dropIndex(index: String)
+  +allTables(): List<TableMetadata>
+  +databaseExists(name: String): boolean
+  +allDatabases(): List<String>
+  +createDatabase(name: String)
+  +dropDatabase(name: String)
+  +load()
+}
+
+class DefaultCatalogManager <<concrete>> {
+  -tablesByDatabase: Map<String, Map<String, TableMetadata>>
+  -databaseNames: Set<String>
+  -catalogStore: CatalogStore
+  -nextTableId: int
+  +getTable(database: String, table: String): Optional<TableMetadata>
+  +tableExists(database: String, table: String): boolean
+  +createTable(table: TableMetadata): TableMetadata
+  +dropTable(database: String, table: String)
+  +addColumn(database: String, table: String, column: ColumnMetadata): TableMetadata
+  +dropColumn(database: String, table: String, column: String): TableMetadata
+  +createIndex(database: String, table: String, index: IndexMetadata): TableMetadata
+  +dropIndex(index: String)
+  +allTables(): List<TableMetadata>
+  +databaseExists(name: String): boolean
+  +allDatabases(): List<String>
+  +createDatabase(name: String)
+  +dropDatabase(name: String)
+  +load()
+}
+
+class TableMetadata <<concrete>> {
+  -tableId: OptionalInt
+  -database: String
+  -name: String
+  -columns: List<ColumnMetadata>
+  -indexes: List<IndexMetadata>
+  +define(database: String, name: String, columns: List<ColumnMetadata>): TableMetadata
+}
+
+class IndexMetadata <<concrete>> {
+  -name: String
+  -columnIds: List<Integer>
+  -unique: boolean
+  +define(name: String, columnIds: List<Integer>): IndexMetadata
+}
+
+class ColumnMetadata <<concrete>> {
+  -columnId: OptionalInt
+  -name: String
+  -type: ColumnType
+  -nullable: boolean
+  +define(name: String, type: ColumnType): ColumnMetadata
+}
+
+enum ColumnType {
+  INT
+  VARCHAR
+  BOOLEAN
+}
+
+class CatalogException <<exception>>
+
+interface CatalogStore {
+  +load(): List<TableMetadata>
+  +saveTable(table: TableMetadata)
+  +dropTable(database: String, table: String)
+  +loadDatabases(): List<String>
+  +createDatabase(name: String)
+  +dropDatabase(name: String)
+}
+
+class JsonCatalogStore <<concrete>> {
+  +load(): List<TableMetadata>
+  +saveTable(table: TableMetadata)
+  +dropTable(database: String, table: String)
+  +loadDatabases(): List<String>
+  +createDatabase(name: String)
+  +dropDatabase(name: String)
+}
+
+interface TableStore
+interface IndexStore
+
+interface LockManager {
+  +runExclusiveCatalog(action: Runnable)
+  +runExclusiveCatalog(action: Supplier<T>): T
+  +lockExclusiveCatalog()
+  +unlockExclusiveCatalog()
+}
+
+class CatalogLockException <<exception>>
+
+class DefaultLockManager <<concrete>> {
+  -catalogLock: ReentrantLock
+  -catalogLockWait: Duration
+  +runExclusiveCatalog(action: Runnable)
+  +runExclusiveCatalog(action: Supplier<T>): T
+  +lockExclusiveCatalog()
+  +unlockExclusiveCatalog()
+}
+
+interface TransactionManager {
+  +runInTransaction(action: Runnable)
+  +runInTransaction(action: Supplier<T>): T
+  +seedNextTxnId(nextTxnId: int)
+  +beginExplicit(lock: LockManager, catalog: CatalogManager)
+  +commitExplicit(lock: LockManager, catalog: CatalogManager)
+  +rollbackExplicit(lock: LockManager, catalog: CatalogManager)
+  +endConnectionSession(lock: LockManager, catalog: CatalogManager)
+  +inExplicitTransaction(): boolean
+  +currentTxnId(): int
+}
+
+class DefaultTransactionManager <<concrete>> {
+  -walManager: WALManager
+  -nextTxnId: AtomicInteger
+  -context: ThreadLocal<TransactionContext>
+  +runInTransaction(action: Runnable)
+  +runInTransaction(action: Supplier<T>): T
+  +beginExplicit()
+  +commitExplicit()
+  +rollbackExplicit()
+}
+
+class TransactionControlExecutor <<concrete>> {
+  +execute(plan: ExecutionPlan): QueryResult
+}
+
+class CheckpointExecutor <<concrete>> {
+  +execute(plan: ExecutionPlan): QueryResult
+}
+
+class CheckpointPlan <<concrete>> {
+  +queryType(): QueryType
+}
+
+interface WALManager {
+  +append(record: WalRecord)
+  +flush()
+  +discardPending()
+  +replay(catalogManager: CatalogManager): int
+  +checkpoint(): int
+}
+
+class DefaultWALManager <<concrete>> {
+  -physicalStorage: PhysicalStorage
+  +append(record: WalRecord)
+  +flush()
+  +discardPending()
+  +replay(catalogManager: CatalogManager): int
+  +checkpoint(): int
+}
+
+class WalCheckpointMeta <<concrete>> {
+  -maxTxnId: int
+}
+
+interface CheckpointStrategy {
+  +awaitTrigger()
+}
+
+enum CheckpointStrategyKind {
+  TIMEOUT
+  WAL_SIZE
+}
+
+class TimeoutCheckpointStrategy <<concrete>> {
+  -timeout: Duration
+  +awaitTrigger()
+}
+
+class WalSizeCheckpointStrategy <<concrete>> {
+  -physicalStorage: PhysicalStorage
+  -maxWalSizeBytes: long
+  +awaitTrigger()
+}
+
+class CheckpointScheduler <<concrete>> {
+  -strategy: CheckpointStrategy
+  -lockManager: LockManager
+  -walManager: WALManager
+  +start()
+  +stop()
+}
+
+class WalRecord <<concrete>> {
+  -op: WalOp
+  -txnId: Integer
+  +commit(txnId: int): WalRecord
+  +createTable(txnId: int, database: String, table: String, columns: List): WalRecord
+}
+
+enum WalOp {
+  CREATE_DATABASE
+  DROP_DATABASE
+  CREATE_TABLE
+  DROP_TABLE
+  ADD_COLUMN
+  DROP_COLUMN
+  CREATE_INDEX
+  DROP_INDEX
+  COMMIT
+  CHECKPOINT
+}
+
+interface BufferPool
+
+class LaunchConfig <<concrete>> {
+  -port: int
+  -dataDir: Path
+  +parse(args: String[]): LaunchConfig
+}
+
+class ServerEnvironment <<concrete>> {
+  +load(dataDirectory: DataDirectory): ServerEnvironment
+  +defaults(): ServerEnvironment
+  +catalogLockWait(): Duration
+  +checkpointEnabled(): boolean
+  +checkpointStrategyKind(): CheckpointStrategyKind
+  +createCheckpointStrategy(physicalStorage: PhysicalStorage): CheckpointStrategy
+}
+
+interface QueryLexer {
+  +tokenize(query: String): List<Token>
+}
+
+class DefaultQueryLexer <<concrete>> {
+  +tokenize(query: String): List<Token>
+}
+
+class LexException <<exception>> {
+  -index: int
+  +index(): int
+  +toResponse(): String
+}
+
+enum TokenCatalog {
+  SELECT
+  UPDATE
+  INSERT
+  DELETE
+  INT
+  VARCHAR
+  BOOLEAN_TYPE
+  IDENTIFIER
+  STRING
+  BOOLEAN
+  NUMBER
+  DOT
+  EOF
+}
+
+class Token <<concrete>> {
+  -kind: TokenCatalog
+  -lexeme: String
+  -index: int
+}
+
+interface QueryParser {
+  +parse(tokens: List<Token>): AstNode
+}
+
+class DefaultQueryParser <<concrete>> {
+  -registry: ParserRegistry
+  +parse(tokens: List<Token>): AstNode
+}
+
+class ParserRegistry <<concrete>> {
+  +register(kind: TokenCatalog, parser: Parser)
+  +getParser(kind: TokenCatalog): Parser
+}
+
+interface Parser {
+  +parse(stream: TokenStream): AstNode
+}
+
+class SelectParser <<concrete>>
+class UpdateParser <<concrete>>
+class InsertParser <<concrete>>
+class DeleteParser <<concrete>>
+class CreateParser <<concrete>>
+class AlterParser <<concrete>>
+class DropParser <<concrete>>
+
+class TokenStream <<concrete>> {
+  +peek(): Token
+  +consume(): Token
+  +expect(kind: TokenCatalog): Token
+}
+
+class ParseException <<exception>> {
+  -index: int
+  +toResponse(): String
+}
+
+interface AstNode
+interface Query
+
+class SelectQuery <<concrete>>
+class UpdateQuery <<concrete>>
+class InsertQuery <<concrete>>
+class DeleteQuery <<concrete>>
+
+enum ColumnSqlType {
+  INT
+  VARCHAR
+  BOOLEAN
+}
+
+class ColumnDefinition <<concrete>> {
+  -name: String
+  -type: ColumnSqlType
+}
+
+class QualifiedTable <<concrete>> {
+  -database: String
+  -table: String
+  +qualifiedName(): String
+}
+
+class CreateTableQuery <<concrete>> {
+  -table: QualifiedTable
+  -columns: List<ColumnDefinition>
+}
+
+interface Expression
+
+class ColumnExpression <<concrete>>
+class LiteralExpression <<concrete>>
+class BinaryExpression <<concrete>>
+
+interface ServerSocket {
+  -port: int
+  +accept(): ClientConnection
+  +close()
+}
+
+interface ClientConnection {
+  -id: ConnectionId
+  +receive(): Request
+  +send(response: Response)
+  +close()
+}
+
+interface Request {
+  +decode()
+}
+
+interface Response {
+  +encode()
+}
+
+class ConnectionId <<concrete>> {
+  -value: String
+}
+
+class TcpNetworkModule <<concrete>> {
+  -serverSocket: ServerSocket
+  -requestHandler: RequestHandler
+  +start()
+  +stop()
+}
+
+class TcpServerSocket <<concrete>> {
+  -socket: java.net.ServerSocket
+  -port: int
+  +accept(): ClientConnection
+  +close()
+}
+
+class TcpClientConnection <<concrete>> {
+  -socket: java.net.Socket
+  -id: ConnectionId
+  +receive(): Request
+  +send(response: Response)
+  +close()
+}
+
+class TcpRequest <<concrete>> {
+  +decode()
+}
+
+class TcpResponse <<concrete>> {
+  +encode()
+}
+
+class JsonWireResponse <<concrete>> {
+  -wireResponse: WireResponse
+  +encode()
+}
+
+class WireProtocol <<concrete>> {
+  +VERSION: int
+}
+
+class WireMessage <<sealed>> {
+  Error
+  Ok
+  ResultSet
+  Done
+}
+
+class WireResponse <<concrete>> {
+  -version: int
+  -messages: List
+}
+
+class WireResponseEncoder <<concrete>> {
+  +fromProcessorText(processorText: String): WireResponse
+}
+
+class WireResponseJson <<concrete>> {
+  +toBytes(response: WireResponse): byte[]
+  +toJson(response: WireResponse): String
+}
+
+DatabaseServer --> StorageEngine : owns
+DatabaseServer --> NetworkModule : owns
+DatabaseServer --> QueryProcessor : uses
+
+NetworkModule <|.. TcpNetworkModule
+RequestHandler <|.. DefaultRequestHandler
+QueryProcessor <|.. DefaultQueryProcessor
+StorageEngine <|.. DefaultStorageEngine
+DefaultStorageEngine --> DataDirectory : owns
+StorageEngine --> PhysicalStorage : owns
+PhysicalStorage <|.. DefaultPhysicalStorage
+DefaultPhysicalStorage --> DataDirectory : uses
+PhysicalStorage ..> PhysicalStorageException : throws
+StorageEngine --> CatalogManager : owns
+CatalogManager <|.. DefaultCatalogManager
+DefaultCatalogManager --> TableMetadata : stores
+TableMetadata --> ColumnMetadata : columns
+TableMetadata --> IndexMetadata : indexes
+ColumnMetadata --> ColumnType : type
+CatalogManager ..> CatalogException : throws
+CatalogManager --> CatalogStore : owns
+CatalogStore <|.. JsonCatalogStore
+JsonCatalogStore --> PhysicalStorage : uses
+QueryLexer <|.. DefaultQueryLexer
+QueryLexer ..> Token : produces
+QueryLexer ..> LexException : throws
+QueryParser <|.. DefaultQueryParser
+Parser <|.. SelectParser
+Parser <|.. UpdateParser
+Parser <|.. InsertParser
+Parser <|.. DeleteParser
+Parser <|.. CreateParser
+Parser <|.. AlterParser
+Parser <|.. DropParser
+
+TcpNetworkModule --> RequestHandler : owns
+DefaultRequestHandler --> QueryProcessor : queryProcessor
+DefaultQueryProcessor --> QueryLexer : owns
+DefaultQueryProcessor --> QueryParser : owns
+DefaultQueryProcessor --> QueryPlanner : owns
+DefaultQueryProcessor --> QueryDispatcher : owns
+DefaultQueryProcessor --> StorageEngine : uses
+DefaultQueryAnalyser --> CatalogManager : reads
+QueryAnalyser <|.. DefaultQueryAnalyser
+AnalyzedQuery <|.. AnalyzedCreateTable
+AnalyzedQuery <|.. AnalyzedCreateDatabase
+AnalyzedQuery <|.. AnalyzedDropTable
+AnalyzedQuery <|.. AnalyzedDropDatabase
+AnalyzedQuery <|.. AnalyzedAddColumn
+AnalyzedQuery <|.. AnalyzedDropColumn
+AnalyzedQuery <|.. AnalyzedCreateIndex
+AnalyzedQuery <|.. AnalyzedDropIndex
+AnalyzedQuery <|.. AnalyzedDescribeTable
+AnalyzedQuery <|.. AnalyzedShowDatabases
+AnalyzedQuery <|.. AnalyzedShowTables
+AnalyzedQuery <|.. UnresolvedQuery
+AnalyzedCreateTable --> ColumnMetadata : columns
+AnalyzedAddColumn --> ColumnMetadata : column
+QueryPlanner <|.. DefaultQueryPlanner
+ExecutionPlan <|.. CreateTablePlan
+ExecutionPlan <|.. CreateDatabasePlan
+ExecutionPlan <|.. DropTablePlan
+ExecutionPlan <|.. DropDatabasePlan
+ExecutionPlan <|.. AddColumnPlan
+ExecutionPlan <|.. DropColumnPlan
+ExecutionPlan <|.. CreateIndexPlan
+ExecutionPlan <|.. DropIndexPlan
+ExecutionPlan <|.. DescribeTablePlan
+ExecutionPlan <|.. ShowDatabasesPlan
+ExecutionPlan <|.. ShowTablesPlan
+ExecutionPlan <|.. UnresolvedPlan
+CreateTablePlan --> ColumnMetadata : columns
+CreateTablePlan --> QueryType
+CreateDatabasePlan --> QueryType
+DropTablePlan --> QueryType
+DropDatabasePlan --> QueryType
+AddColumnPlan --> QueryType
+DropColumnPlan --> QueryType
+CreateIndexPlan --> QueryType
+DropIndexPlan --> QueryType
+AddColumnPlan --> ColumnMetadata : column
+UnresolvedPlan --> UnresolvedQuery : source
+DefaultQueryPlanner ..> AnalyzedCreateTable
+DefaultQueryPlanner ..> AnalyzedCreateDatabase
+DefaultQueryPlanner ..> AnalyzedDropTable
+DefaultQueryPlanner ..> AnalyzedDropDatabase
+DefaultQueryPlanner ..> AnalyzedAddColumn
+DefaultQueryPlanner ..> AnalyzedDropColumn
+DefaultQueryPlanner ..> AnalyzedCreateIndex
+DefaultQueryPlanner ..> AnalyzedDropIndex
+QueryDispatcher --> ExecutorRegistry
+ExecutorRegistry --> QueryExecutor
+QueryExecutor <|.. CommandExecutor
+QueryExecutor <|.. TransactionControlExecutor
+QueryExecutor <|.. CheckpointExecutor
+QueryExecutor <|.. DescribeExecutor
+CommandExecutor --> CatalogManager : writes
+DescribeExecutor --> CatalogManager : reads
+CommandExecutor --> TransactionManager : implicit txn / explicit append
+CommandExecutor --> LockManager : runExclusiveCatalog
+CommandExecutor --> WALManager : append (flush at commit)
+TransactionControlExecutor --> TransactionManager : begin/commit/rollback
+CheckpointExecutor --> LockManager : runExclusiveCatalog
+CheckpointExecutor --> WALManager : checkpoint
+CheckpointExecutor --> TransactionManager : reject if explicit
+TransactionManager <|.. DefaultTransactionManager
+DefaultTransactionManager --> WALManager : flush COMMIT / discard
+LockManager <|.. DefaultLockManager
+WALManager <|.. DefaultWALManager
+DefaultWALManager --> PhysicalStorage : wal.log
+DefaultWALManager --> PhysicalStorage : wal.checkpoint
+DefaultWALManager --> PhysicalStorage : replay/replay-*.log
+DefaultWALManager ..> CatalogManager : replay
+CheckpointStrategy <|.. TimeoutCheckpointStrategy
+CheckpointStrategy <|.. WalSizeCheckpointStrategy
+CheckpointScheduler --> CheckpointStrategy
+CheckpointScheduler --> LockManager
+CheckpointScheduler --> WALManager : checkpoint
+ServerEnvironment ..> CheckpointStrategy : createCheckpointStrategy
+WalRecord --> WalOp
+DefaultStorageEngine --> TransactionManager : owns
+DefaultStorageEngine --> LockManager : owns
+DefaultStorageEngine --> WALManager : owns
+DefaultStorageEngine --> CheckpointScheduler : owns
+ExecutionPlan <|.. CheckpointPlan
+CheckpointExecutor ..> CheckpointPlan
+CommandExecutor ..> CreateTablePlan
+CommandExecutor ..> CreateDatabasePlan
+CommandExecutor ..> DropTablePlan
+CommandExecutor ..> DropDatabasePlan
+CommandExecutor ..> AddColumnPlan
+CommandExecutor ..> DropColumnPlan
+CommandExecutor ..> CreateIndexPlan
+CommandExecutor ..> DropIndexPlan
+StorageEngine --> TableStore : owns
+StorageEngine --> IndexStore : owns
+StorageEngine --> BufferPool : owns
+DefaultQueryParser --> ParserRegistry
+ParserRegistry --> Parser
+DefaultQueryParser ..> TokenStream
+QueryParser ..> AstNode : produces
+QueryParser ..> ParseException : throws
+AstNode <|-- Query
+Query <|.. SelectQuery
+Query <|.. UpdateQuery
+Query <|.. InsertQuery
+Query <|.. DeleteQuery
+Query <|.. CreateTableQuery
+CreateTableQuery --> QualifiedTable : table
+CreateTableQuery --> ColumnDefinition : columns
+ColumnDefinition --> ColumnSqlType : type
+AstNode <|-- Expression
+Expression <|.. ColumnExpression
+Expression <|.. LiteralExpression
+Expression <|.. BinaryExpression
+Token --> TokenCatalog : kind
+
+ServerSocket <|.. TcpServerSocket
+ClientConnection <|.. TcpClientConnection
+Request <|.. TcpRequest
+Response <|.. TcpResponse
+Response <|.. JsonWireResponse
+
+DefaultRequestHandler --> WireResponseEncoder : fromProcessorText
+WireResponseEncoder --> WireResponse
+JsonWireResponse --> WireResponse : wireResponse
+JsonWireResponse --> WireResponseJson : encode
+
+TcpNetworkModule --> ServerSocket : serverSocket
+ServerSocket --> ClientConnection : accept()
+ClientConnection --> ConnectionId : id
+ClientConnection --> Request : receive()
+ClientConnection --> Response : send()
+@enduml

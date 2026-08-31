@@ -5,9 +5,10 @@ alwaysApply: true
 
 # Update LLD with the code
 
-Whenever you add, remove, or change types, APIs, ownership, or wiring, update **both**:
+Whenever you add, remove, or change types, APIs, ownership, or wiring, update **all of**:
 
 - `docs/lld/java-database-lld.md` (Mermaid class diagram)
+- `docs/lld/java-database-lld.puml` (PlantUML class diagram)
 - `docs/lld/java-database-lld.txt` (text LLD: types, methods, relationships, design notes)
 
 Do this in the same change as the code. Do not leave the LLD describing stubs that are now real, or relationships that are not wired yet.
