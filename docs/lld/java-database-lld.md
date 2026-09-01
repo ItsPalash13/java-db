@@ -671,6 +671,7 @@ classDiagram
         +rollbackExplicit(LockManager, CatalogManager)
         +endConnectionSession(LockManager, CatalogManager)
         +inExplicitTransaction() boolean
+        +activeExplicitSessionCount() int
         +currentTxnId() int
     }
 
@@ -678,10 +679,12 @@ classDiagram
         <<concrete>>
         -WALManager walManager
         -AtomicInteger nextTxnId
+        -AtomicInteger activeExplicitSessions
         -ThreadLocal~TransactionContext~ context
         +runInTransaction(Runnable action)
         +runInTransaction(Supplier~T~ action) T
         +beginExplicit / commitExplicit / rollbackExplicit
+            // BEGIN: defer catalog persist, no catalog lock; COMMIT: brief catalog X + persist
     }
 
     class TransactionControlExecutor {

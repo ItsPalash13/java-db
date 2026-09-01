@@ -623,18 +623,21 @@ interface TransactionManager {
   +rollbackExplicit(lock: LockManager, catalog: CatalogManager)
   +endConnectionSession(lock: LockManager, catalog: CatalogManager)
   +inExplicitTransaction(): boolean
+  +activeExplicitSessionCount(): int
   +currentTxnId(): int
 }
 
 class DefaultTransactionManager <<concrete>> {
   -walManager: WALManager
   -nextTxnId: AtomicInteger
+  -activeExplicitSessions: AtomicInteger
   -context: ThreadLocal<TransactionContext>
   +runInTransaction(action: Runnable)
   +runInTransaction(action: Supplier<T>): T
   +beginExplicit()
   +commitExplicit()
   +rollbackExplicit()
+    note right: BEGIN defers catalog persist;\nCOMMIT takes brief catalog X
 }
 
 class TransactionControlExecutor <<concrete>> {

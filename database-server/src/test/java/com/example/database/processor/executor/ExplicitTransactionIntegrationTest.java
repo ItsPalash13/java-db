@@ -118,14 +118,16 @@ class ExplicitTransactionIntegrationTest {
         WALManager wal = new DefaultWALManager(new DefaultPhysicalStorage(new DataDirectory(tempDir)));
         TransactionManager tx = new DefaultTransactionManager(wal);
         LockManager lock = new DefaultLockManager();
+        com.example.database.storage.table.InMemoryTableStore tableStore =
+                new com.example.database.storage.table.InMemoryTableStore();
         CommandExecutor ddl = new CommandExecutor(
                 catalog,
                 tx,
                 lock,
                 wal,
-                new com.example.database.storage.table.InMemoryTableStore()
+                tableStore
         );
-        TransactionControlExecutor control = new TransactionControlExecutor(tx, lock, catalog);
+        TransactionControlExecutor control = new TransactionControlExecutor(tx, lock, catalog, tableStore);
         return new ExplicitTxnFixture(catalog, ddl, control);
     }
 

@@ -2,6 +2,7 @@ package com.example.database.storage.transaction;
 
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.lock.LockManager;
+import com.example.database.storage.table.TableStore;
 
 import java.util.function.Supplier;
 
@@ -29,25 +30,29 @@ public interface TransactionManager {
     void seedNextTxnId(int nextTxnId);
 
     /**
-     * Starts an explicit client transaction on this thread. Holds the catalog lock until
-     * commit or rollback.
+     * Starts an explicit client transaction on this thread. Defers catalog.json writes until
+     * {@link #commitExplicit}; does not hold the catalog lock for the whole session so other
+     * connections can {@code BEGIN} concurrently.
      *
      * @throws IllegalStateException if a transaction is already active on this thread
      */
-    void beginExplicit(LockManager lockManager, CatalogManager catalogManager);
+    void beginExplicit(LockManager lockManager, CatalogManager catalogManager, TableStore tableStore);
 
-    void commitExplicit(LockManager lockManager, CatalogManager catalogManager);
+    void commitExplicit(LockManager lockManager, CatalogManager catalogManager, TableStore tableStore);
 
-    void rollbackExplicit(LockManager lockManager, CatalogManager catalogManager);
+    void rollbackExplicit(LockManager lockManager, CatalogManager catalogManager, TableStore tableStore);
 
     /**
      * Client disconnected: roll back an open explicit txn on this thread and release
-     * the catalog lock. Safe to call when no transaction is active.
+     * scoped locks. Safe to call when no transaction is active.
      */
-    void endConnectionSession(LockManager lockManager, CatalogManager catalogManager);
+    void endConnectionSession(LockManager lockManager, CatalogManager catalogManager, TableStore tableStore);
 
     /** Whether this thread is inside an explicit {@code BEGIN} session. */
     boolean inExplicitTransaction();
+
+    /** Open explicit sessions anywhere in the process (used to defer CHECKPOINT). */
+    int activeExplicitSessionCount();
 
     /**
      * Active txn id for WAL append on this thread, or throws if none.

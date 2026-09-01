@@ -56,7 +56,8 @@ public final class DefaultStorageEngine implements StorageEngine {
         this.checkpointScheduler = new CheckpointScheduler(
                 environment.createCheckpointStrategy(physicalStorage),
                 lockManager,
-                walManager
+                walManager,
+                transactionManager
         );
     }
 

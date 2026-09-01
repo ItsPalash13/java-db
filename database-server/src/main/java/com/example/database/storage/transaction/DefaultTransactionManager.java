@@ -3,6 +3,8 @@ package com.example.database.storage.transaction;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.CatalogSnapshot;
 import com.example.database.storage.lock.LockManager;
+import com.example.database.storage.table.TableSnapshot;
+import com.example.database.storage.table.TableStore;
 import com.example.database.storage.wal.WALManager;
 import com.example.database.storage.wal.WalRecord;
 
@@ -13,11 +15,16 @@ import java.util.function.Supplier;
 /**
  * Implicit single-statement and explicit {@code BEGIN} sessions. WAL records carry
  * {@code txnId}; durable flush happens at commit with a trailing {@code COMMIT} record.
+ * <p>
+ * Explicit sessions defer catalog.json writes and take the catalog lock only on
+ * {@link #commitExplicit} (brief persist), not for the whole {@code BEGIN … COMMIT} span.
+ * Heap rows are snapshotted at {@link #beginExplicit} and restored on rollback.
  */
 public final class DefaultTransactionManager implements TransactionManager {
 
     private final WALManager walManager;
     private final AtomicInteger nextTxnId = new AtomicInteger(1);
+    private final AtomicInteger activeExplicitSessions = new AtomicInteger(0);
     private final ThreadLocal<TransactionContext> context = ThreadLocal.withInitial(TransactionContext::new);
     // Per-thread depth: one implicit txn at a time; explicit sessions reject nested runInTransaction.
     private final ThreadLocal<Integer> implicitDepth = ThreadLocal.withInitial(() -> 0);
@@ -71,74 +78,97 @@ public final class DefaultTransactionManager implements TransactionManager {
     }
 
     @Override
-    public void beginExplicit(LockManager lockManager, CatalogManager catalogManager) {
+    public void beginExplicit(LockManager lockManager, CatalogManager catalogManager, TableStore tableStore) {
         Objects.requireNonNull(lockManager, "lockManager");
         Objects.requireNonNull(catalogManager, "catalogManager");
+        Objects.requireNonNull(tableStore, "tableStore");
         if (context.get().active()) {
             throw new IllegalStateException("transaction already active");
         }
-        lockManager.lockExclusiveCatalog();
-        try {
-            int txnId = allocateTxnId();
-            CatalogSnapshot snapshot = catalogManager.snapshot();
-            catalogManager.setDeferPersist(true);
-            context.get().beginExplicit(txnId, snapshot);
-            walManager.discardPending();
-        } catch (RuntimeException e) {
-            catalogManager.setDeferPersist(false);
-            lockManager.unlockExclusiveCatalog();
-            throw e;
-        }
+        int txnId = allocateTxnId();
+        CatalogSnapshot catalogSnapshot = catalogManager.snapshot();
+        TableSnapshot tableSnapshot = tableStore.snapshot();
+        catalogManager.setDeferPersist(true);
+        context.get().beginExplicit(txnId, catalogSnapshot, tableSnapshot);
+        walManager.discardPending();
+        activeExplicitSessions.incrementAndGet();
     }
 
     @Override
-    public void commitExplicit(LockManager lockManager, CatalogManager catalogManager) {
+    public void commitExplicit(LockManager lockManager, CatalogManager catalogManager, TableStore tableStore) {
         Objects.requireNonNull(lockManager, "lockManager");
         Objects.requireNonNull(catalogManager, "catalogManager");
+        Objects.requireNonNull(tableStore, "tableStore");
         TransactionContext session = context.get();
         if (!session.explicitMode()) {
             throw new IllegalStateException("no explicit transaction to commit");
         }
         int txnId = session.txnId();
-        CatalogSnapshot before = session.catalogSnapshot();
+        CatalogSnapshot catalogBefore = session.catalogSnapshot();
+        lockManager.bindOwner(txnId);
+        boolean persisted = false;
         try {
-            walManager.append(WalRecord.commit(txnId));
-            walManager.flush();
-            catalogManager.setDeferPersist(false);
-            catalogManager.persistChangesSince(before);
-        } catch (RuntimeException e) {
-            catalogManager.setDeferPersist(false);
-            catalogManager.restoreSnapshot(before);
-            walManager.discardPending();
-            throw e;
+            lockManager.lockExclusiveCatalog();
+            try {
+                walManager.append(WalRecord.commit(txnId));
+                walManager.flush();
+                catalogManager.setDeferPersist(false);
+                catalogManager.persistChangesSince(catalogBefore);
+                persisted = true;
+            } catch (RuntimeException e) {
+                catalogManager.setDeferPersist(false);
+                catalogManager.restoreSnapshot(catalogBefore);
+                tableStore.restoreSnapshot(session.tableSnapshot());
+                walManager.discardPending();
+                throw e;
+            } finally {
+                lockManager.unlockExclusiveCatalog();
+            }
         } finally {
+            lockManager.unlockAllForOwner();
+            lockManager.clearOwnerBinding();
+            if (!persisted) {
+                catalogManager.setDeferPersist(false);
+                catalogManager.restoreSnapshot(catalogBefore);
+                tableStore.restoreSnapshot(session.tableSnapshot());
+                walManager.discardPending();
+            }
             session.clear();
-            lockManager.unlockExclusiveCatalog();
+            activeExplicitSessions.decrementAndGet();
         }
     }
 
     @Override
-    public void rollbackExplicit(LockManager lockManager, CatalogManager catalogManager) {
+    public void rollbackExplicit(LockManager lockManager, CatalogManager catalogManager, TableStore tableStore) {
         Objects.requireNonNull(lockManager, "lockManager");
         Objects.requireNonNull(catalogManager, "catalogManager");
+        Objects.requireNonNull(tableStore, "tableStore");
         TransactionContext session = context.get();
         if (!session.explicitMode()) {
             throw new IllegalStateException("no explicit transaction to rollback");
         }
-        CatalogSnapshot before = session.catalogSnapshot();
+        int txnId = session.txnId();
         catalogManager.setDeferPersist(false);
-        catalogManager.restoreSnapshot(before);
+        catalogManager.restoreSnapshot(session.catalogSnapshot());
+        tableStore.restoreSnapshot(session.tableSnapshot());
         walManager.discardPending();
-        session.clear();
-        lockManager.unlockExclusiveCatalog();
+        lockManager.bindOwner(txnId);
+        try {
+            lockManager.unlockAllForOwner();
+        } finally {
+            lockManager.clearOwnerBinding();
+            session.clear();
+            activeExplicitSessions.decrementAndGet();
+        }
     }
 
     @Override
-    public void endConnectionSession(LockManager lockManager, CatalogManager catalogManager) {
+    public void endConnectionSession(LockManager lockManager, CatalogManager catalogManager, TableStore tableStore) {
         Objects.requireNonNull(lockManager, "lockManager");
         Objects.requireNonNull(catalogManager, "catalogManager");
+        Objects.requireNonNull(tableStore, "tableStore");
         if (inExplicitTransaction()) {
-            rollbackExplicit(lockManager, catalogManager);
+            rollbackExplicit(lockManager, catalogManager, tableStore);
             return;
         }
         context.get().clear();
@@ -147,6 +177,11 @@ public final class DefaultTransactionManager implements TransactionManager {
     @Override
     public boolean inExplicitTransaction() {
         return context.get().explicitMode();
+    }
+
+    @Override
+    public int activeExplicitSessionCount() {
+        return activeExplicitSessions.get();
     }
 
     @Override

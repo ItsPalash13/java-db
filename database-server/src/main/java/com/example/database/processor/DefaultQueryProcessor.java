@@ -31,6 +31,7 @@ import com.example.database.storage.DefaultStorageEngine;
 import com.example.database.storage.StorageEngine;
 import com.example.database.storage.lock.CatalogLockException;
 import com.example.database.storage.lock.LockException;
+import com.example.database.storage.transaction.TransactionManager;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -118,9 +119,25 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             System.out.println("[QueryProcessor] execute error: " + error);
             return QueryResult.error(error);
         } catch (LockException e) {
+            rollbackExplicitIfActive();
             String error = "ERROR: " + e.getMessage();
             System.out.println("[QueryProcessor] lock error: " + error);
             return QueryResult.error(error);
+        }
+    }
+
+    /**
+     * Wait-Die and other lock failures abort the whole explicit session so a partial
+     * COMMIT cannot persist work after ERROR (see {@code TransactionAbortedException}).
+     */
+    private void rollbackExplicitIfActive() {
+        TransactionManager transactions = storageEngine.transactionManager();
+        if (transactions.inExplicitTransaction()) {
+            transactions.rollbackExplicit(
+                    storageEngine.lockManager(),
+                    storageEngine.catalogManager(),
+                    storageEngine.tableStore()
+            );
         }
     }
 
@@ -128,7 +145,8 @@ public final class DefaultQueryProcessor implements QueryProcessor {
     public void endConnectionSession() {
         storageEngine.transactionManager().endConnectionSession(
                 storageEngine.lockManager(),
-                storageEngine.catalogManager()
+                storageEngine.catalogManager(),
+                storageEngine.tableStore()
         );
     }
 
@@ -145,7 +163,8 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             TransactionControlExecutor transactionControl = new TransactionControlExecutor(
                     storageEngine.transactionManager(),
                     storageEngine.lockManager(),
-                    storageEngine.catalogManager()
+                    storageEngine.catalogManager(),
+                    storageEngine.tableStore()
             );
             CheckpointExecutor checkpoint = new CheckpointExecutor(
                     storageEngine.lockManager(),

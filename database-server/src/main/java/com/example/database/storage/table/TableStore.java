@@ -34,4 +34,10 @@ public interface TableStore {
 
     /** Drops every heap under {@code database}. Called after DROP DATABASE. */
     void dropDatabase(String database);
+
+    /** Captures all heap rows for rollback of an explicit transaction. */
+    TableSnapshot snapshot();
+
+    /** Restores heap rows from a {@link #snapshot()} taken at {@code BEGIN}. */
+    void restoreSnapshot(TableSnapshot snapshot);
 }

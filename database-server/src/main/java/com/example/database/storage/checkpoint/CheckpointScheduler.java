@@ -1,6 +1,7 @@
 package com.example.database.storage.checkpoint;
 
 import com.example.database.storage.lock.LockManager;
+import com.example.database.storage.transaction.TransactionManager;
 import com.example.database.storage.wal.WALManager;
 
 import java.util.Objects;
@@ -19,6 +20,7 @@ public final class CheckpointScheduler {
     private final CheckpointStrategy strategy;
     private final LockManager lockManager;
     private final WALManager walManager;
+    private final TransactionManager transactionManager;
     private final Object monitor = new Object();
     private Thread worker;
     private volatile boolean running;
@@ -26,11 +28,13 @@ public final class CheckpointScheduler {
     public CheckpointScheduler(
             CheckpointStrategy strategy,
             LockManager lockManager,
-            WALManager walManager
+            WALManager walManager,
+            TransactionManager transactionManager
     ) {
         this.strategy = Objects.requireNonNull(strategy, "strategy");
         this.lockManager = Objects.requireNonNull(lockManager, "lockManager");
         this.walManager = Objects.requireNonNull(walManager, "walManager");
+        this.transactionManager = Objects.requireNonNull(transactionManager, "transactionManager");
     }
 
     public void start() {
@@ -76,8 +80,11 @@ public final class CheckpointScheduler {
                 if (!running) {
                     return;
                 }
-                // Catalog lock: wait out explicit BEGIN sessions so we never truncate
-                // WAL past ops that are committed in the log but not yet in catalog.json.
+                // Skip while any connection has an open BEGIN — deferred catalog / WAL must
+                // not be truncated before those sessions COMMIT or ROLLBACK.
+                if (transactionManager.activeExplicitSessionCount() > 0) {
+                    continue;
+                }
                 lockManager.runExclusiveCatalog(walManager::checkpoint);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

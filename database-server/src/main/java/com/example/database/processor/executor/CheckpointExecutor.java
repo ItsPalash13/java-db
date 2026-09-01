@@ -12,10 +12,8 @@ import java.util.Objects;
  * Manual {@code CHECKPOINT} SQL path — administrator force, not a {@code CheckpointStrategy}.
  * <p>
  * Runs the same durable-only {@link WALManager#checkpoint()} as the background scheduler.
- * Refuses inside an explicit transaction: that session already holds the catalog lock with
- * {@code deferPersist}, and ReentrantLock would re-enter on this thread, letting us truncate
- * WAL while catalog.json still lags — data loss on crash. Outside BEGIN, we take the lock
- * freshly so we wait for any other connection's DDL / explicit txn to finish first.
+ * Refuses inside an explicit transaction or while any other connection has an open
+ * {@code BEGIN} (deferred catalog / uncommitted WAL must not be truncated).
  */
 public final class CheckpointExecutor implements QueryExecutor {
 
@@ -41,6 +39,11 @@ public final class CheckpointExecutor implements QueryExecutor {
         }
         if (transactionManager.inExplicitTransaction()) {
             throw new ExecutionException("CHECKPOINT is not allowed inside an explicit transaction");
+        }
+        if (transactionManager.activeExplicitSessionCount() > 0) {
+            throw new ExecutionException(
+                    "CHECKPOINT is not allowed while other explicit transactions are active"
+            );
         }
         try {
             lockManager.runExclusiveCatalog(walManager::checkpoint);

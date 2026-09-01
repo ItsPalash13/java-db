@@ -6,6 +6,7 @@ import com.example.database.storage.lock.CatalogLockException;
 import com.example.database.storage.lock.DefaultLockManager;
 import com.example.database.storage.lock.LockManager;
 import com.example.database.storage.physical.DefaultPhysicalStorage;
+import com.example.database.storage.table.InMemoryTableStore;
 import com.example.database.storage.wal.DefaultWALManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -16,6 +17,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -25,111 +27,151 @@ class ExplicitTransactionLockTest {
     Path tempDir;
 
     @Test
-    void beginWaitsUntilFirstConnectionReleasesLock() throws Exception {
+    void twoConnectionsCanBeginConcurrently() throws Exception {
         LockManager lock = new DefaultLockManager();
         DefaultCatalogManager catalog = new DefaultCatalogManager();
+        InMemoryTableStore tableStore = new InMemoryTableStore();
         catalog.createDatabase("shop");
         TransactionManager transactions = newTransactionManager();
 
-        CountDownLatch firstStarted = new CountDownLatch(1);
-        CountDownLatch releaseFirst = new CountDownLatch(1);
-        AtomicReference<Exception> secondBeginError = new AtomicReference<>();
+        CountDownLatch bothStarted = new CountDownLatch(2);
+        AtomicReference<Exception> firstError = new AtomicReference<>();
+        AtomicReference<Exception> secondError = new AtomicReference<>();
 
         Thread first = new Thread(() -> {
-            transactions.beginExplicit(lock, catalog);
-            firstStarted.countDown();
             try {
-                releaseFirst.await(5, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            } finally {
-                if (transactions.inExplicitTransaction()) {
-                    transactions.rollbackExplicit(lock, catalog);
-                }
+                transactions.beginExplicit(lock, catalog, tableStore);
+                bothStarted.countDown();
+                transactions.rollbackExplicit(lock, catalog, tableStore);
+            } catch (RuntimeException e) {
+                firstError.set(e);
+                bothStarted.countDown();
             }
         });
         Thread second = new Thread(() -> {
             try {
-                firstStarted.await(5, TimeUnit.SECONDS);
-                transactions.beginExplicit(lock, catalog);
-                transactions.rollbackExplicit(lock, catalog);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                transactions.beginExplicit(lock, catalog, tableStore);
+                bothStarted.countDown();
+                transactions.rollbackExplicit(lock, catalog, tableStore);
             } catch (RuntimeException e) {
-                secondBeginError.set(e);
+                secondError.set(e);
+                bothStarted.countDown();
             }
         });
 
         first.start();
-        firstStarted.await(5, TimeUnit.SECONDS);
         second.start();
-        Thread.sleep(100);
-        releaseFirst.countDown();
+        assertTrue(bothStarted.await(5, TimeUnit.SECONDS));
 
         first.join(5_000);
         second.join(5_000);
 
-        assertNull(secondBeginError.get());
+        assertNull(firstError.get());
+        assertNull(secondError.get());
+        assertEquals(0, transactions.activeExplicitSessionCount());
     }
 
     @Test
-    void beginTimesOutWhenLockHeldPastWaitLimit() throws Exception {
-        LockManager lock = new DefaultLockManager(Duration.ofMillis(200));
+    void commitWaitsForCatalogLockHeldByAnotherConnection() throws Exception {
+        LockManager lock = new DefaultLockManager(Duration.ofSeconds(2));
         DefaultCatalogManager catalog = new DefaultCatalogManager();
+        InMemoryTableStore tableStore = new InMemoryTableStore();
         catalog.createDatabase("shop");
         TransactionManager transactions = newTransactionManager();
 
-        CountDownLatch firstStarted = new CountDownLatch(1);
-        AtomicReference<Exception> secondBeginError = new AtomicReference<>();
+        CountDownLatch beginDone = new CountDownLatch(1);
+        AtomicReference<Exception> sessionError = new AtomicReference<>();
 
-        Thread first = new Thread(() -> {
-            transactions.beginExplicit(lock, catalog);
-            firstStarted.countDown();
+        Thread session = new Thread(() -> {
+            try {
+                transactions.beginExplicit(lock, catalog, tableStore);
+                beginDone.countDown();
+                transactions.commitExplicit(lock, catalog, tableStore);
+            } catch (RuntimeException e) {
+                sessionError.set(e);
+                beginDone.countDown();
+            }
+        });
+
+        Thread blocker = new Thread(() -> {
+            try {
+                beginDone.await(5, TimeUnit.SECONDS);
+                lock.lockExclusiveCatalog();
+                Thread.sleep(300);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                lock.unlockExclusiveCatalog();
+            }
+        });
+
+        session.start();
+        blocker.start();
+        session.join(5_000);
+        blocker.join(5_000);
+
+        assertNull(sessionError.get());
+        assertEquals(0, transactions.activeExplicitSessionCount());
+    }
+
+    @Test
+    void commitTimesOutWhenCatalogLockHeldPastWaitLimit() throws Exception {
+        LockManager lock = new DefaultLockManager(Duration.ofMillis(200));
+        DefaultCatalogManager catalog = new DefaultCatalogManager();
+        InMemoryTableStore tableStore = new InMemoryTableStore();
+        catalog.createDatabase("shop");
+        TransactionManager transactions = newTransactionManager();
+
+        CountDownLatch catalogHeld = new CountDownLatch(1);
+        AtomicReference<Exception> sessionError = new AtomicReference<>();
+
+        Thread blocker = new Thread(() -> {
+            lock.lockExclusiveCatalog();
+            catalogHeld.countDown();
             try {
                 Thread.sleep(2_000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } finally {
-                if (transactions.inExplicitTransaction()) {
-                    transactions.rollbackExplicit(lock, catalog);
-                }
+                lock.unlockExclusiveCatalog();
             }
         });
-        Thread second = new Thread(() -> {
+
+        Thread session = new Thread(() -> {
             try {
-                firstStarted.await(5, TimeUnit.SECONDS);
-                transactions.beginExplicit(lock, catalog);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            } catch (RuntimeException e) {
-                secondBeginError.set(e);
+                catalogHeld.await(5, TimeUnit.SECONDS);
+                transactions.beginExplicit(lock, catalog, tableStore);
+                transactions.commitExplicit(lock, catalog, tableStore);
+            } catch (Exception e) {
+                sessionError.set(e);
             }
         });
 
-        first.start();
-        firstStarted.await(5, TimeUnit.SECONDS);
-        second.start();
-        second.join(5_000);
+        blocker.start();
+        catalogHeld.await(5, TimeUnit.SECONDS);
+        session.start();
+        session.join(5_000);
+        blocker.join(5_000);
 
-        Exception error = secondBeginError.get();
+        Exception error = sessionError.get();
         assertTrue(error instanceof CatalogLockException);
         assertTrue(error.getMessage().contains("timed out"));
-
-        first.interrupt();
-        first.join(2_000);
+        assertEquals(0, transactions.activeExplicitSessionCount());
     }
 
     @Test
-    void endConnectionSessionReleasesCatalogLock() {
+    void endConnectionSessionAllowsNewBegin() {
         LockManager lock = new DefaultLockManager();
         DefaultCatalogManager catalog = new DefaultCatalogManager();
+        InMemoryTableStore tableStore = new InMemoryTableStore();
         catalog.createDatabase("shop");
         TransactionManager transactions = newTransactionManager();
 
-        transactions.beginExplicit(lock, catalog);
-        transactions.endConnectionSession(lock, catalog);
+        transactions.beginExplicit(lock, catalog, tableStore);
+        transactions.endConnectionSession(lock, catalog, tableStore);
 
-        assertNull(secondBeginError(transactions, lock, catalog));
+        assertNull(secondBeginError(transactions, lock, catalog, tableStore));
+        assertEquals(0, transactions.activeExplicitSessionCount());
     }
 
     private TransactionManager newTransactionManager() {
@@ -141,11 +183,12 @@ class ExplicitTransactionLockTest {
     private static Exception secondBeginError(
             TransactionManager transactions,
             LockManager lock,
-            DefaultCatalogManager catalog
+            DefaultCatalogManager catalog,
+            InMemoryTableStore tableStore
     ) {
         try {
-            transactions.beginExplicit(lock, catalog);
-            transactions.rollbackExplicit(lock, catalog);
+            transactions.beginExplicit(lock, catalog, tableStore);
+            transactions.rollbackExplicit(lock, catalog, tableStore);
             return null;
         } catch (Exception e) {
             return e;

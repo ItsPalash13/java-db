@@ -78,7 +78,7 @@ public final class VolcanoExecutor implements QueryExecutor {
             List<List<Object>> rows = drain(root);
             return QueryResult.resultSet(toWireColumns(plan.projections()), rows);
         } finally {
-            lockManager.unlockAllForOwner();
+            releaseStatementLocks();
         }
     }
 
@@ -95,7 +95,7 @@ public final class VolcanoExecutor implements QueryExecutor {
             drain(root);
             return QueryResult.ok();
         } finally {
-            lockManager.unlockAllForOwner();
+            releaseStatementLocks();
         }
     }
 
@@ -120,7 +120,7 @@ public final class VolcanoExecutor implements QueryExecutor {
             drain(root);
             return QueryResult.ok();
         } finally {
-            lockManager.unlockAllForOwner();
+            releaseStatementLocks();
         }
     }
 
@@ -142,11 +142,26 @@ public final class VolcanoExecutor implements QueryExecutor {
             drain(root);
             return QueryResult.ok();
         } finally {
-            lockManager.unlockAllForOwner();
+            releaseStatementLocks();
         }
     }
 
+    /**
+     * Implicit statements wrap runInTransaction; explicit BEGIN sessions reuse the open txn id
+     * and keep table/row locks until COMMIT/ROLLBACK.
+     */
     private <T> T runLocked(Supplier<T> action) {
+        if (transactionManager.inExplicitTransaction()) {
+            lockManager.bindOwner(transactionManager.currentTxnId());
+            try {
+                return action.get();
+            } catch (LockException e) {
+                lockManager.unlockAllForOwner();
+                throw e;
+            } finally {
+                lockManager.clearOwnerBinding();
+            }
+        }
         return transactionManager.runInTransaction(() -> {
             lockManager.bindOwner(transactionManager.currentTxnId());
             try {
@@ -158,6 +173,13 @@ public final class VolcanoExecutor implements QueryExecutor {
                 lockManager.clearOwnerBinding();
             }
         });
+    }
+
+    /** Explicit txn holds scoped locks for the whole session; implicit releases per statement. */
+    private void releaseStatementLocks() {
+        if (!transactionManager.inExplicitTransaction()) {
+            lockManager.unlockAllForOwner();
+        }
     }
 
     private static List<List<Object>> drain(VolcanoOperator root) {

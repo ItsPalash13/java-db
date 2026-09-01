@@ -639,12 +639,13 @@ owns transaction lifecycle (implicit single-statement + explicit BEGIN sessions)
 + runInTransaction(action: Runnable)
 + runInTransaction(action: Supplier<T>): T
 + seedNextTxnId(nextTxnId: int)
-+ beginExplicit(lock: LockManager, catalog: CatalogManager)
-+ commitExplicit(lock: LockManager, catalog: CatalogManager)
-+ rollbackExplicit(lock: LockManager, catalog: CatalogManager)
-+ endConnectionSession(lock: LockManager, catalog: CatalogManager)
++ beginExplicit(lock, catalog, tableStore)
++ commitExplicit(lock, catalog, tableStore)
++ rollbackExplicit(lock, catalog, tableStore)
++ endConnectionSession(lock, catalog, tableStore)
     // disconnect cleanup: rollback open explicit txn on this thread if any
 + inExplicitTransaction(): boolean
++ activeExplicitSessionCount(): int
 + currentTxnId(): int
 
 
@@ -652,10 +653,17 @@ owns transaction lifecycle (implicit single-statement + explicit BEGIN sessions)
 DefaultTransactionManager
 - walManager: WALManager
 - nextTxnId: AtomicInteger
-- context: ThreadLocal<TransactionContext>
-+ implicit: allocate txnId → append DDL → append COMMIT → flush
-+ explicit: BEGIN waits for catalog lock (same timeout as implicit DDL); COMMIT/ROLLBACK release
-+ endConnectionSession: disconnect rollback on connection worker thread
+- activeExplicitSessions: AtomicInteger
+- context: ThreadLocal<TransactionContext>  // catalog + TableSnapshot at BEGIN
++ explicit: BEGIN snapshots catalog + heap; COMMIT brief catalog X; ROLLBACK restores both
++ DefaultQueryProcessor rolls back explicit session on LockException (Wait-Die abort)
+
+
+<<record>>
+TableSnapshot
++ tablesByKey: Map<String, List<Tuple>>
++ nextRowId: long
+  // InMemoryTableStore only; file store would use pages/undo later
 
 
 <<concrete>>

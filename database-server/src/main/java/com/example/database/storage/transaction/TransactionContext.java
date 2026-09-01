@@ -1,6 +1,7 @@
 package com.example.database.storage.transaction;
 
 import com.example.database.storage.catalog.CatalogSnapshot;
+import com.example.database.storage.table.TableSnapshot;
 
 /**
  * Per-thread transaction session for explicit {@code BEGIN} or implicit single-statement txns.
@@ -16,6 +17,7 @@ final class TransactionContext {
     private Mode mode = Mode.NONE;
     private int txnId;
     private CatalogSnapshot catalogSnapshot;
+    private TableSnapshot tableSnapshot;
 
     Mode mode() {
         return mode;
@@ -29,22 +31,29 @@ final class TransactionContext {
         return catalogSnapshot;
     }
 
+    TableSnapshot tableSnapshot() {
+        return tableSnapshot;
+    }
+
     void beginImplicit(int txnId) {
         this.mode = Mode.IMPLICIT;
         this.txnId = txnId;
         this.catalogSnapshot = null;
+        this.tableSnapshot = null;
     }
 
-    void beginExplicit(int txnId, CatalogSnapshot catalogSnapshot) {
+    void beginExplicit(int txnId, CatalogSnapshot catalogSnapshot, TableSnapshot tableSnapshot) {
         this.mode = Mode.EXPLICIT;
         this.txnId = txnId;
         this.catalogSnapshot = catalogSnapshot;
+        this.tableSnapshot = tableSnapshot;
     }
 
     void clear() {
         mode = Mode.NONE;
         txnId = 0;
         catalogSnapshot = null;
+        tableSnapshot = null;
     }
 
     boolean active() {

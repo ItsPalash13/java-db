@@ -4,6 +4,7 @@ import com.example.database.processor.executor.engine.volcano.Tuple;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -81,6 +82,37 @@ public final class InMemoryTableStore implements TableStore {
         Objects.requireNonNull(database, "database");
         String prefix = database + ".";
         tables.keySet().removeIf(key -> key.startsWith(prefix));
+    }
+
+    @Override
+    public TableSnapshot snapshot() {
+        Map<String, List<Tuple>> copy = new HashMap<>();
+        for (Map.Entry<String, List<Tuple>> entry : tables.entrySet()) {
+            List<Tuple> rows = entry.getValue();
+            synchronized (rows) {
+                copy.put(entry.getKey(), copyRows(rows));
+            }
+        }
+        return new TableSnapshot(copy, nextRowId.get());
+    }
+
+    @Override
+    public void restoreSnapshot(TableSnapshot snapshot) {
+        Objects.requireNonNull(snapshot, "snapshot");
+        tables.clear();
+        for (Map.Entry<String, List<Tuple>> entry : snapshot.tablesByKey().entrySet()) {
+            tables.put(entry.getKey(), Collections.synchronizedList(copyRows(entry.getValue())));
+        }
+        nextRowId.set(snapshot.nextRowId());
+    }
+
+    private static List<Tuple> copyRows(List<Tuple> rows) {
+        List<Tuple> copy = new ArrayList<>(rows.size());
+        for (Tuple row : rows) {
+            Object[] values = row.values();
+            copy.add(new Tuple(row.rowId(), values.clone()));
+        }
+        return copy;
     }
 
     private static String key(String database, String table) {

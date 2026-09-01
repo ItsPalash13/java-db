@@ -9,6 +9,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Condition;
@@ -50,8 +51,8 @@ public final class DefaultLockManager implements LockManager {
     // Reverse index so unlockAllForOwner() can drop every scoped lock for a txn without scanning all keys.
     private final Map<Long, List<HeldLock>> heldByOwner = new HashMap<>();
 
-    // Wound-Wait sets this; Wait-Die throws before wait. Checked on every acquire loop iteration.
-    private final Map<Long, AtomicBoolean> abortFlags = new HashMap<>();
+    // Concurrent: bindOwner runs on connection threads without holding stateMutex.
+    private final Map<Long, AtomicBoolean> abortFlags = new ConcurrentHashMap<>();
 
     // When set (via bindOwner), lock owner id is txnId — not thread id — so locks follow the transaction.
     private final ThreadLocal<Long> boundOwner = new ThreadLocal<>();
