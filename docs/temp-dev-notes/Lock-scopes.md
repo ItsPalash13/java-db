@@ -8,6 +8,7 @@ Related:
 - `docs/temp-dev-notes/Phase-2-transaction-lock-wal-plan.md` — catalog exclusive today; table S/X later
 - `docs/concurrency/used.md` — one `ReentrantLock` for all catalog DDL
 - `docs/todo` — scoped LockManager, whole-txn hold, deadlock detection
+- `docs/temp-dev-notes/Lock-scopes-implementation.md` — classes/methods: phase 1 table S/X + db IS/IX; phase 2 row S/X + deadlock
 
 ---
 
@@ -142,7 +143,7 @@ Do not hold catalog X for `SELECT`. That would make scopes useless.
 - usually **table IX** (not table X) so two row-X can coexist
 - deadlock detection (two txns, two rows, opposite order)
 
-Deadlock detection is **required** at row scope. At table-only scope it still matters for **two tables in one txn** (`users` then `orders` vs the reverse). Timeout (30s `CatalogLockException`) is not detection — the blocker may still be running.
+Deadlock detection is **required** at row scope unless you use **prevention** (Wait-Die / Wound-Wait). If you detect, you still need a separate **resolution** policy (who to abort) — finding a cycle is not resolution. See `Lock-scopes-implementation.md`. At table-only scope deadlock still matters for **two tables in one txn** (`users` then `orders` vs the reverse). Timeout (30s) is not detection or resolution.
 
 ---
 
@@ -170,8 +171,8 @@ COMMIT                           -- release all
 |-------|-------------------------|
 | Dummy Volcano, single-threaded | none new (today’s catalog lock still wraps DDL) |
 | First concurrent DML | **table S/X** + **database IS/IX/X** |
+| Row locks | **row S/X** + table **IS/IX**; prevention (Wait-Die/Wound-Wait) or detect+resolve (graph + victim) |
 | Explicit txn | same objects, held until COMMIT |
-| Later | **row X** (+ table IX instead of table X on UPDATE/DELETE) |
 
 Page latches arrive with BufferPool, orthogonal to this list.
 

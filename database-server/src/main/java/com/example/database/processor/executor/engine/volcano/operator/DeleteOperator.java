@@ -1,6 +1,8 @@
 package com.example.database.processor.executor.engine.volcano.operator;
 
 import com.example.database.processor.executor.engine.volcano.Tuple;
+import com.example.database.storage.lock.LockManager;
+import com.example.database.storage.lock.LockMode;
 import com.example.database.storage.table.TableStore;
 
 import java.util.Objects;
@@ -12,12 +14,20 @@ public final class DeleteOperator implements VolcanoOperator {
 
     private final VolcanoOperator child;
     private final TableStore tableStore;
+    private final LockManager lockManager;
     private final String database;
     private final String table;
 
-    public DeleteOperator(VolcanoOperator child, TableStore tableStore, String database, String table) {
+    public DeleteOperator(
+            VolcanoOperator child,
+            TableStore tableStore,
+            LockManager lockManager,
+            String database,
+            String table
+    ) {
         this.child = Objects.requireNonNull(child, "child");
         this.tableStore = Objects.requireNonNull(tableStore, "tableStore");
+        this.lockManager = Objects.requireNonNull(lockManager, "lockManager");
         this.database = Objects.requireNonNull(database, "database");
         this.table = Objects.requireNonNull(table, "table");
     }
@@ -34,7 +44,12 @@ public final class DeleteOperator implements VolcanoOperator {
             if (tuple == null) {
                 return null;
             }
-            tableStore.delete(database, table, tuple.rowId());
+            lockManager.lockRow(database, table, tuple.rowId(), LockMode.X);
+            try {
+                tableStore.delete(database, table, tuple.rowId());
+            } finally {
+                lockManager.unlockRow(database, table, tuple.rowId(), LockMode.X);
+            }
         }
     }
 

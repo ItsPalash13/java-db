@@ -30,6 +30,7 @@ import com.example.database.storage.DataDirectory;
 import com.example.database.storage.DefaultStorageEngine;
 import com.example.database.storage.StorageEngine;
 import com.example.database.storage.lock.CatalogLockException;
+import com.example.database.storage.lock.LockException;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -116,7 +117,7 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             String error = e.toResponse();
             System.out.println("[QueryProcessor] execute error: " + error);
             return QueryResult.error(error);
-        } catch (CatalogLockException e) {
+        } catch (LockException e) {
             String error = "ERROR: " + e.getMessage();
             System.out.println("[QueryProcessor] lock error: " + error);
             return QueryResult.error(error);
@@ -152,7 +153,11 @@ public final class DefaultQueryProcessor implements QueryProcessor {
                     storageEngine.transactionManager()
             );
             DescribeExecutor describe = new DescribeExecutor(storageEngine.catalogManager());
-            VolcanoExecutor volcano = new VolcanoExecutor(storageEngine.tableStore());
+            VolcanoExecutor volcano = new VolcanoExecutor(
+                    storageEngine.tableStore(),
+                    storageEngine.lockManager(),
+                    storageEngine.transactionManager()
+            );
             registry.register(QueryType.CREATE_TABLE, commands);
             registry.register(QueryType.DROP_TABLE, commands);
             registry.register(QueryType.CREATE_DATABASE, commands);

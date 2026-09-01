@@ -159,7 +159,7 @@ Lock scope hierarchy: **database → table → row**. Acquire coarse before fine
 
 ## What we are not doing yet
 
-- Row/page locks (`BufferPool`, `TableStore` not built)
+- Row locks (later). Page **latches** belong to BufferPool when it exists — not LockManager (`docs/temp-dev-notes/BufferPool.md`)
 - `LockManager` / `TransactionManager` — interfaces only; not wired
 - Online DDL (reads during `ALTER`) — defer until MVCC or copy-on-write schema
 - Locking in lex, parse, or plan

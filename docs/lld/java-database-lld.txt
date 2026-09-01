@@ -359,10 +359,11 @@ CommandExecutor
 <<concrete>>
 VolcanoExecutor
 - tableStore: TableStore
+- lockManager: LockManager
+- transactionManager: TransactionManager
 + execute(plan: ExecutionPlan): QueryResult
-    // SELECT / INSERT / UPDATE / DELETE via pull-iterator operators over TableStore
-    // Plans stay declarative; operators (SeqScan/Filter/Project/Insert/Update/Delete) are an implementation detail
-    // INDEX_SCAN treated as SeqScan until IndexStore / B+Tree
+    // SELECT: table IS + row S; writes: table IX + row X; Wait-Die on row conflicts
+    // implicit txn per statement via TransactionManager.runInTransaction
 
 
 <<concrete>>
@@ -582,26 +583,54 @@ owns indexes
 
 <<interface>>
 LockManager
-owns concurrency locks (catalog exclusive today; table S/X later)
+owns concurrency locks: catalog exclusive + scoped database/table/row (IS/IX/S/X)
 + runExclusiveCatalog(action: Runnable)
 + runExclusiveCatalog(action: Supplier<T>): T
-    // blocking ReentrantLock; unlock in finally
-+ lockExclusiveCatalog()   // waits up to catalogLockWait; throws CatalogLockException on timeout
++ lockExclusiveCatalog()   // waits up to lockWait; throws CatalogLockException on timeout
 + unlockExclusiveCatalog()
++ bindOwner(ownerId: long) / clearOwnerBinding()
++ runWithTable(db, table, LockMode, action)   // parent IS/IX inside
++ runWithDatabase(db, LockMode.X, action)
++ lockTable / unlockTable / lockRow / unlockRow / unlockAllForOwner()
+
+
+<<enumeration>>
+LockMode
+IS, IX, S, X
++ compatible(held, requested): boolean
++ intentionFor(childMode): LockMode
+
+
+<<record>>
+LockKey
+catalog() / database(name) / table(db, table) / row(db, table, rowId)
 
 
 <<concrete>>
-CatalogLockException
+LockException
++ message
+
+
+<<concrete>>
+TransactionAbortedException extends LockException
++ message   // Wait-Die victim on row lock
+
+
+<<concrete>>
+CatalogLockException extends LockException
 + message
 
 
 <<concrete>>
 DefaultLockManager
 - catalogLock: ReentrantLock
-- catalogLockWait: Duration   // from ServerEnvironment; default 30s
-+ runExclusiveCatalog(action: Runnable)
-+ runExclusiveCatalog(action: Supplier<T>): T
-+ lockExclusiveCatalog / unlockExclusiveCatalog
+- stateMutex: ReentrantLock   // latch on lock-table map, not a SQL table lock
+- states: Map<LockKey, LockState>
+- heldByOwner: Map<Long, List<HeldLock>>
+- lockWait: Duration   // from ServerEnvironment; default 30s
+- deadlockMode: PREVENT (Wait-Die on row keys only)
++ runExclusiveCatalog / runWithTable / runWithDatabase
++ lockTable / lockRow / unlockAllForOwner
 
 
 <<interface>>
@@ -1067,7 +1096,7 @@ DatabaseServer
       │              │               │         └── uses PhysicalStorage
       │              │               └── TableMetadata → ColumnMetadata → ColumnType
       │              ├── TransactionManager → DefaultTransactionManager
-      │              ├── LockManager → DefaultLockManager (catalog exclusive)
+      │              ├── LockManager → DefaultLockManager (catalog X + scoped db/table/row)
       │              ├── WALManager → DefaultWALManager (wal.log + wal.checkpoint)
       │              ├── CheckpointScheduler → CheckpointStrategy (timeout | wal_size)
       │              │         └── CommandExecutor: txn → lock → WAL append+flush → CatalogManager (+ TableStore drop)

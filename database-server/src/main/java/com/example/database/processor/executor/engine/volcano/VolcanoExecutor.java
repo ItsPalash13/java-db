@@ -18,7 +18,11 @@ import com.example.database.processor.planner.InsertPlan;
 import com.example.database.processor.planner.SelectPlan;
 import com.example.database.processor.planner.UpdatePlan;
 import com.example.database.storage.catalog.ColumnMetadata;
+import com.example.database.storage.lock.LockException;
+import com.example.database.storage.lock.LockManager;
+import com.example.database.storage.lock.LockMode;
 import com.example.database.storage.table.TableStore;
+import com.example.database.storage.transaction.TransactionManager;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -26,88 +30,134 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Supplier;
 
 /**
  * Pull-iterator DML/DQL executor. Compiles declarative plans into Volcano operators
- * over {@link TableStore}. INDEX_SCAN is treated as SeqScan until IndexStore exists.
+ * over {@link TableStore}. Takes table IS/IX and row S/X locks at execute time.
  */
 public final class VolcanoExecutor implements QueryExecutor {
 
     private final TableStore tableStore;
+    private final LockManager lockManager;
+    private final TransactionManager transactionManager;
 
-    public VolcanoExecutor(TableStore tableStore) {
+    public VolcanoExecutor(TableStore tableStore, LockManager lockManager, TransactionManager transactionManager) {
         this.tableStore = Objects.requireNonNull(tableStore, "tableStore");
+        this.lockManager = Objects.requireNonNull(lockManager, "lockManager");
+        this.transactionManager = Objects.requireNonNull(transactionManager, "transactionManager");
     }
 
     @Override
     public QueryResult execute(ExecutionPlan plan) {
         Objects.requireNonNull(plan, "plan");
         if (plan instanceof SelectPlan select) {
-            return executeSelect(select);
+            return runLocked(() -> executeSelect(select));
         }
         if (plan instanceof InsertPlan insert) {
-            return executeInsert(insert);
+            return runLocked(() -> executeInsert(insert));
         }
         if (plan instanceof UpdatePlan update) {
-            return executeUpdate(update);
+            return runLocked(() -> executeUpdate(update));
         }
         if (plan instanceof DeletePlan delete) {
-            return executeDelete(delete);
+            return runLocked(() -> executeDelete(delete));
         }
         throw new ExecutionException("VolcanoExecutor cannot execute " + plan.queryType());
     }
 
     private QueryResult executeSelect(SelectPlan plan) {
-        // INDEX_SCAN uses SeqScan until B+Tree; Filter still applies WHERE.
-        ExpressionEvaluator evaluator = evaluator(plan.columns());
-        VolcanoOperator root = new SeqScan(tableStore, plan.database(), plan.table());
-        if (plan.where() != null) {
-            root = new Filter(root, plan.where(), evaluator);
+        lockManager.lockTable(plan.database(), plan.table(), LockMode.IS);
+        try {
+            ExpressionEvaluator evaluator = evaluator(plan.columns());
+            VolcanoOperator root = new SeqScan(tableStore, lockManager, plan.database(), plan.table());
+            if (plan.where() != null) {
+                root = new Filter(root, plan.where(), evaluator);
+            }
+            root = new Project(root, plan.projections());
+            List<List<Object>> rows = drain(root);
+            return QueryResult.resultSet(toWireColumns(plan.projections()), rows);
+        } finally {
+            lockManager.unlockAllForOwner();
         }
-        root = new Project(root, plan.projections());
-        List<List<Object>> rows = drain(root);
-        return QueryResult.resultSet(toWireColumns(plan.projections()), rows);
     }
 
     private QueryResult executeInsert(InsertPlan plan) {
-        VolcanoOperator root = new InsertOperator(
-                tableStore,
-                plan.database(),
-                plan.table(),
-                plan.values()
-        );
-        drain(root);
-        return QueryResult.ok();
+        lockManager.lockTable(plan.database(), plan.table(), LockMode.IX);
+        try {
+            VolcanoOperator root = new InsertOperator(
+                    tableStore,
+                    lockManager,
+                    plan.database(),
+                    plan.table(),
+                    plan.values()
+            );
+            drain(root);
+            return QueryResult.ok();
+        } finally {
+            lockManager.unlockAllForOwner();
+        }
     }
 
     private QueryResult executeUpdate(UpdatePlan plan) {
-        ExpressionEvaluator evaluator = evaluator(plan.columns());
-        VolcanoOperator scan = new SeqScan(tableStore, plan.database(), plan.table());
-        if (plan.where() != null) {
-            scan = new Filter(scan, plan.where(), evaluator);
+        lockManager.lockTable(plan.database(), plan.table(), LockMode.IX);
+        try {
+            ExpressionEvaluator evaluator = evaluator(plan.columns());
+            VolcanoOperator scan = new SeqScan(tableStore, plan.database(), plan.table());
+            if (plan.where() != null) {
+                scan = new Filter(scan, plan.where(), evaluator);
+            }
+            VolcanoOperator root = new UpdateOperator(
+                    scan,
+                    tableStore,
+                    lockManager,
+                    plan.database(),
+                    plan.table(),
+                    plan.assignments(),
+                    evaluator,
+                    plan.columns().size()
+            );
+            drain(root);
+            return QueryResult.ok();
+        } finally {
+            lockManager.unlockAllForOwner();
         }
-        VolcanoOperator root = new UpdateOperator(
-                scan,
-                tableStore,
-                plan.database(),
-                plan.table(),
-                plan.assignments(),
-                evaluator,
-                plan.columns().size()
-        );
-        drain(root);
-        return QueryResult.ok();
     }
 
     private QueryResult executeDelete(DeletePlan plan) {
-        ExpressionEvaluator evaluator = evaluator(plan.columns());
-        VolcanoOperator scan = new SeqScan(tableStore, plan.database(), plan.table());
-        if (plan.where() != null) {
-            scan = new Filter(scan, plan.where(), evaluator);
+        lockManager.lockTable(plan.database(), plan.table(), LockMode.IX);
+        try {
+            ExpressionEvaluator evaluator = evaluator(plan.columns());
+            VolcanoOperator scan = new SeqScan(tableStore, plan.database(), plan.table());
+            if (plan.where() != null) {
+                scan = new Filter(scan, plan.where(), evaluator);
+            }
+            VolcanoOperator root = new DeleteOperator(
+                    scan,
+                    tableStore,
+                    lockManager,
+                    plan.database(),
+                    plan.table()
+            );
+            drain(root);
+            return QueryResult.ok();
+        } finally {
+            lockManager.unlockAllForOwner();
         }
-        VolcanoOperator root = new DeleteOperator(scan, tableStore, plan.database(), plan.table());
-        drain(root);
-        return QueryResult.ok();
+    }
+
+    private <T> T runLocked(Supplier<T> action) {
+        return transactionManager.runInTransaction(() -> {
+            lockManager.bindOwner(transactionManager.currentTxnId());
+            try {
+                return action.get();
+            } catch (LockException e) {
+                lockManager.unlockAllForOwner();
+                throw e;
+            } finally {
+                lockManager.clearOwnerBinding();
+            }
+        });
     }
 
     private static List<List<Object>> drain(VolcanoOperator root) {

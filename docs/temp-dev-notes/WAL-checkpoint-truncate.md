@@ -15,7 +15,7 @@ Caller holds exclusive catalog lock (scheduler or `CheckpointExecutor`).
 3. **Append** `{"op":"CHECKPOINT","txnId":N}` to `wal.log` (same append path as DDL flush)
 4. Return `maxTxnId`
 
-Does **not** flush dirty pages (no buffer pool yet). Assumes catalog files already reflect committed work through that high-water mark.
+Does **not** flush dirty pages (no buffer pool yet). Assumes catalog files already reflect committed work through that high-water mark. When BufferPool exists, checkpoint must flush dirty frames after WAL — see `docs/temp-dev-notes/BufferPool.md`.
 
 ## Replay
 

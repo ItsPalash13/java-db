@@ -343,6 +343,8 @@ class DescribeExecutor <<concrete>> {
 
 class VolcanoExecutor <<concrete>> {
   -tableStore: TableStore
+  -lockManager: LockManager
+  -transactionManager: TransactionManager
   +execute(plan: ExecutionPlan): QueryResult
 }
 
@@ -563,18 +565,54 @@ interface LockManager {
   +runExclusiveCatalog(action: Supplier<T>): T
   +lockExclusiveCatalog()
   +unlockExclusiveCatalog()
+  +bindOwner(ownerId: long)
+  +clearOwnerBinding()
+  +runWithTable(db, table, LockMode, action)
+  +runWithDatabase(db, LockMode, action)
+  +lockTable / unlockTable / lockRow / unlockRow
+  +unlockAllForOwner()
 }
+
+enum LockMode {
+  IS
+  IX
+  S
+  X
+}
+
+enum LockLevel {
+  CATALOG
+  DATABASE
+  TABLE
+  ROW
+}
+
+class LockKey <<record>> {
+  +catalog(): LockKey
+  +database(name): LockKey
+  +table(db, table): LockKey
+  +row(db, table, rowId): LockKey
+}
+
+class LockException <<exception>>
+class TransactionAbortedException <<exception>>
 
 class CatalogLockException <<exception>>
 
 class DefaultLockManager <<concrete>> {
   -catalogLock: ReentrantLock
-  -catalogLockWait: Duration
-  +runExclusiveCatalog(action: Runnable)
-  +runExclusiveCatalog(action: Supplier<T>): T
-  +lockExclusiveCatalog()
-  +unlockExclusiveCatalog()
+  -stateMutex: ReentrantLock
+  -states: Map<LockKey, LockState>
+  -heldByOwner: Map<Long, List<HeldLock>>
+  -lockWait: Duration
+  +runExclusiveCatalog(...)
+  +runWithTable(...)
+  +runWithDatabase(...)
+  +lockTable / lockRow / unlockAllForOwner
 }
+
+LockException <|-- CatalogLockException
+LockException <|-- TransactionAbortedException
 
 interface TransactionManager {
   +runInTransaction(action: Runnable)
@@ -1016,9 +1054,11 @@ CommandExecutor --> CatalogManager : writes
 CommandExecutor --> TableStore : dropTable / dropDatabase
 DescribeExecutor --> CatalogManager : reads
 CommandExecutor --> TransactionManager : implicit txn / explicit append
-CommandExecutor --> LockManager : runExclusiveCatalog
+CommandExecutor --> LockManager : table X / database X / catalog X
 CommandExecutor --> WALManager : append (flush at commit)
 VolcanoExecutor --> TableStore : DML/DQL
+VolcanoExecutor --> LockManager : table IS/IX + row S/X
+VolcanoExecutor --> TransactionManager : implicit txn per statement
 VolcanoExecutor ..> VolcanoOperator : compiles plan
 VolcanoOperator ..> Tuple
 ExpressionEvaluator ..> Tuple
