@@ -422,6 +422,7 @@ classDiagram
         +lockManager() LockManager
         +walManager() WALManager
         +tableStore() TableStore
+        +bufferPool() BufferPool
     }
 
     class DefaultStorageEngine {
@@ -434,6 +435,7 @@ classDiagram
         -LockManager lockManager
         -CheckpointScheduler checkpointScheduler
         -TableStore tableStore
+        -BufferPool bufferPool
         -boolean checkpointEnabled
         +start()
         +stop()
@@ -443,6 +445,7 @@ classDiagram
         +lockManager() LockManager
         +walManager() WALManager
         +tableStore() TableStore
+        +bufferPool() BufferPool
     }
 
     class DataDirectory {
@@ -463,6 +466,7 @@ classDiagram
         +write(String file, byte[] bytes)
         +read(String file, long offset, int length) byte[]
         +write(String file, long offset, byte[] bytes)
+        +byteLength(String file) long
         +flush(String file)
         +createDirectory(String path)
         +deleteDirectory(String path)
@@ -474,17 +478,8 @@ classDiagram
         -Path root
         -int pageSize
         +pageSize() int
-        +create(String file)
-        +delete(String file)
-        +exists(String file) boolean
-        +read(String file) byte[]
-        +write(String file, byte[] bytes)
-        +read(String file, long offset, int length) byte[]
-        +write(String file, long offset, byte[] bytes)
-        +flush(String file)
-        +createDirectory(String path)
-        +deleteDirectory(String path)
-        +listDirectories(String path) List~String~
+        +create / delete / exists / read / write / byteLength / flush
+        +createDirectory / deleteDirectory / listDirectories
     }
 
     class PhysicalStorageException {
@@ -852,6 +847,38 @@ classDiagram
 
     class BufferPool {
         <<interface>>
+        +pin(PageId pageId) BufferFrame
+        +newPage(String file) BufferFrame
+        +unpin(BufferFrame frame)
+        +latchShared / latchExclusive / unlatch
+        +markDirty(BufferFrame frame)
+        +flush(PageId pageId) / flushAll()
+    }
+
+    class PageId {
+        <<record>>
+        +String file
+        +int pageId
+    }
+
+    class BufferFrame {
+        <<concrete>>
+        -byte[] data
+        -int pinCount
+        -boolean dirty
+        +data() / pageId() / pinCount() / dirty()
+    }
+
+    class DefaultBufferPool {
+        <<concrete>>
+        -PhysicalStorage storage
+        -BufferFrame[] frames
+        -clockHand: int
+        +DEFAULT_FRAME_COUNT = 64
+    }
+
+    class BufferPoolException {
+        <<concrete>>
     }
 
     class LaunchConfig {
@@ -1326,6 +1353,12 @@ classDiagram
     DefaultStorageEngine --> InMemoryTableStore : constructs
     StorageEngine --> IndexStore : owns
     StorageEngine --> BufferPool : owns
+    DefaultStorageEngine --> DefaultBufferPool : constructs
+    BufferPool <|.. DefaultBufferPool
+    DefaultBufferPool --> BufferFrame
+    DefaultBufferPool --> PageId
+    DefaultBufferPool --> PhysicalStorage : page I/O
+    DefaultBufferPool ..> HeapPage : newPage empty image
     DefaultQueryParser --> ParserRegistry
     ParserRegistry --> Parser
     DefaultQueryParser ..> TokenStream

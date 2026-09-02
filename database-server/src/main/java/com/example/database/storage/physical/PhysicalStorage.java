@@ -27,6 +27,16 @@ public interface PhysicalStorage {
     /** Overwrite bytes at {@code offset}. Offset must be within {@code [0, fileLength]}. */
     void write(String file, long offset, byte[] bytes);
 
+    /**
+     * Current size of {@code file} in bytes.
+     * {@link com.example.database.storage.bufferpool.BufferPool#newPage} uses
+     * {@code length / pageSize()} as the next {@code pageId} when appending.
+     * Not used by catalog whole-file I/O.
+     *
+     * @throws PhysicalStorageException if the file is missing
+     */
+    long byteLength(String file);
+
     /** Request that buffered writes for this file reach durable storage. */
     void flush(String file);
 

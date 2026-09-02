@@ -14,6 +14,8 @@ Do **not** comment getters, setters, or restatements of the next line (`i++ // i
 
 Prefer one or two sentences above the block. Name the consequence (crash, data loss, security, layering).
 
+For **type/method descriptions and usage examples**, follow `.cursor/rules/java-api-docs.mdc` (Javadoc + end-of-file examples). This rule covers **inline why** only.
+
 ```java
 // BAD — restates the call
 channel.force(true);

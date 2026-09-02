@@ -115,14 +115,16 @@ B+ tree–compatible means: **same container and pool**, not “reuse `HeapPage.
 
 ---
 
-## Phase 3 — BufferPool + flush to disk
+## Done — Phase 3 (BufferPool + flush)
 
 - `BufferPool`: frames, pin/unpin, latch S/X, dirty bit, clock eviction
 - Page key is **`(file, pageId)`**; I/O via `PhysicalStorage` (`offset = pageId * pageSize` within that file)
-- `flush` / `flushAll` for eviction, checkpoint, and `StorageEngine.stop`
-- First policy: **no-steal** (do not evict dirty pages of open txns) until DML WAL exists
-- Wire pool in `StorageEngine`; Volcano never calls pin — only `TableStore` / later `IndexStore`
-- Catalog JSON and `wal.log` stay **off** the pool; heap and index pages share **one** pool
+- `flush` / `flushAll` for eviction path (dirty only via flush), checkpoint hook, and `StorageEngine.stop`
+- Phase 3 policy: **never evict dirty frames** (global no-steal until DML WAL)
+- Wired in `StorageEngine` as `DefaultBufferPool`; Volcano never calls pin — only future `TableStore` / `IndexStore`
+- Catalog JSON and `wal.log` stay **off** the pool; heap and index pages will share **one** pool
+- Types: `PageId`, `BufferFrame`, `DefaultBufferPool`, `PhysicalStorage.byteLength`
+- **DML still `InMemoryTableStore`** — restart still loses rows until Phase 4
 
 Detail: `docs/temp-dev-notes/BufferPool.md`
 

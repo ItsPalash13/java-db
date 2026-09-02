@@ -10,15 +10,20 @@ Related:
 - `docs/todo` — Page + BufferPool + file TableStore (step 4); IndexStore trees after that
 - `docs/temp-dev-notes/WAL-checkpoint-truncate.md` — checkpoint does **not** flush dirty pages yet (no pool)
 - `PhysicalStorage` / `DefaultPhysicalStorage` — bytes and `flush()`; `pageSize` default 16 KiB; catalog still whole-file
-- `storage/bufferpool/BufferPool.java` — empty interface; StorageEngine does not construct one
+- `storage/bufferpool/BufferPool.java` — API; `DefaultBufferPool` constructed by StorageEngine
 
 ---
 
 ## What we have now
 
-`BufferPool` is a stub. `TableStore` is `InMemoryTableStore` (RAM lists, lost on restart, not WAL-logged). Catalog JSON and `wal.log` go **straight** to `PhysicalStorage` (whole-file / append). Offset `read`/`write` already exist so later page I/O is `offset = pageId * pageSize` without reading the whole heap file.
+`DefaultBufferPool` is wired in `DefaultStorageEngine` (pin/unpin, latch S/X, dirty, clock, flushAll on stop).
+`TableStore` is still `InMemoryTableStore` (RAM lists, lost on restart, not WAL-logged). Catalog JSON and
+`wal.log` go **straight** to `PhysicalStorage` (whole-file / append). Offset `read`/`write`/`byteLength`
+exist so page I/O is `offset = pageId * pageSize`.
 
-Until this layer exists, Volcano never sees a page. Do not invent `readPage` on `PhysicalStorage` — the pool is the only caller of page-sized I/O.
+Until FileTableStore exists, Volcano never sees a page. Do not invent `readPage` on `PhysicalStorage` —
+the pool is the only caller of page-sized I/O. Phase 3 clock **never evicts dirty frames**; callers must
+`flush` / `flushAll` (or engine `stop`) to write them.
 
 ---
 

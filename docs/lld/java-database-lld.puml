@@ -393,6 +393,7 @@ interface StorageEngine {
   +lockManager(): LockManager
   +walManager(): WALManager
   +tableStore(): TableStore
+  +bufferPool(): BufferPool
 }
 
 class DefaultStorageEngine <<concrete>> {
@@ -404,6 +405,7 @@ class DefaultStorageEngine <<concrete>> {
   -lockManager: LockManager
   -checkpointScheduler: CheckpointScheduler
   -tableStore: TableStore
+  -bufferPool: BufferPool
   -checkpointEnabled: boolean
   +start()
   +stop()
@@ -413,6 +415,7 @@ class DefaultStorageEngine <<concrete>> {
   +lockManager(): LockManager
   +walManager(): WALManager
   +tableStore(): TableStore
+  +bufferPool(): BufferPool
 }
 
 class DataDirectory <<concrete>> {
@@ -431,6 +434,7 @@ interface PhysicalStorage {
   +write(file: String, bytes: byte[])
   +read(file: String, offset: long, length: int): byte[]
   +write(file: String, offset: long, bytes: byte[])
+  +byteLength(file: String): long
   +flush(file: String)
   +createDirectory(path: String)
   +deleteDirectory(path: String)
@@ -441,17 +445,8 @@ class DefaultPhysicalStorage <<concrete>> {
   -root: Path
   -pageSize: int
   +pageSize(): int
-  +create(file: String)
-  +delete(file: String)
-  +exists(file: String): boolean
-  +read(file: String): byte[]
-  +write(file: String, bytes: byte[])
-  +read(file: String, offset: long, length: int): byte[]
-  +write(file: String, offset: long, bytes: byte[])
-  +flush(file: String)
-  +createDirectory(path: String)
-  +deleteDirectory(path: String)
-  +listDirectories(path: String): List<String>
+  +create / delete / exists / read / write / byteLength / flush
+  +createDirectory / deleteDirectory / listDirectories
 }
 
 class PhysicalStorageException <<exception>>
@@ -774,7 +769,35 @@ enum WalOp {
   CHECKPOINT
 }
 
-interface BufferPool
+interface BufferPool {
+  +pin(pageId: PageId): BufferFrame
+  +newPage(file: String): BufferFrame
+  +unpin(frame: BufferFrame)
+  +latchShared / latchExclusive / unlatch(frame)
+  +markDirty(frame)
+  +flush(pageId) / flushAll()
+}
+
+class PageId <<record>> {
+  +file: String
+  +pageId: int
+}
+
+class BufferFrame <<concrete>> {
+  -data: byte[]
+  -pinCount: int
+  -dirty: boolean
+  +data() / pageId() / pinCount() / dirty()
+}
+
+class DefaultBufferPool <<concrete>> {
+  -storage: PhysicalStorage
+  -frames: BufferFrame[]
+  -clockHand: int
+  +DEFAULT_FRAME_COUNT = 64
+}
+
+class BufferPoolException <<concrete>>
 
 class LaunchConfig <<concrete>> {
   -port: int
@@ -1171,6 +1194,12 @@ StorageEngine --> TableStore : owns
 DefaultStorageEngine --> InMemoryTableStore : constructs
 StorageEngine --> IndexStore : owns
 StorageEngine --> BufferPool : owns
+DefaultStorageEngine --> DefaultBufferPool : constructs
+BufferPool <|.. DefaultBufferPool
+DefaultBufferPool --> BufferFrame
+DefaultBufferPool --> PageId
+DefaultBufferPool --> PhysicalStorage : page I/O
+DefaultBufferPool ..> HeapPage : newPage empty image
 DefaultQueryParser --> ParserRegistry
 ParserRegistry --> Parser
 DefaultQueryParser ..> TokenStream

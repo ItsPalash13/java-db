@@ -454,9 +454,10 @@ StorageEngine
 + lockManager(): LockManager   // requires start(); throws if not started
 + walManager(): WALManager   // requires start(); throws if not started
 + tableStore(): TableStore   // requires start(); throws if not started
-owns (wired): CatalogManager, PhysicalStorage, TransactionManager, LockManager, WALManager, CheckpointScheduler, UndoableTableStore(InMemoryTableStore)
-owns (stubs, not wired): IndexStore, BufferPool
-exists (codecs only, not wired): HeapPage, RowCodec, RidMap / InMemoryRidMap
++ bufferPool(): BufferPool   // requires start(); wired; unused by DML until FileTableStore
+owns (wired): CatalogManager, PhysicalStorage, TransactionManager, LockManager, WALManager, CheckpointScheduler, UndoableTableStore(InMemoryTableStore), DefaultBufferPool
+owns (stubs, not wired): IndexStore
+exists (codecs; used by pool newPage / tests): HeapPage, RowCodec, RidMap / InMemoryRidMap
 
 
 <<interface>>
@@ -857,7 +858,44 @@ WalException extends RuntimeException
 
 <<interface>>
 BufferPool
-cached persistent blocks/pages
+RAM cache of fixed-size disk pages for .ibd / .idx (not catalog, not WAL)
++ pin(pageId: PageId): BufferFrame
++ newPage(file: String): BufferFrame
++ unpin(frame: BufferFrame)
++ latchShared / latchExclusive / unlatch(frame)
++ markDirty(frame)
++ flush(pageId) / flushAll()
+    // Volcano never calls pin — only future FileTableStore / IndexStore
+
+
+<<record>>
+PageId
++ file: String
++ pageId: int
+    // disk offset = pageId × pageSize within that file
+
+
+<<concrete>>
+BufferFrame
+- index, pageId, data[pageSize], pinCount, dirty, referenced, occupied
++ data(): byte[]   // only while pinned+latched
++ pageId() / pinCount() / dirty()
+
+
+<<concrete>>
+DefaultBufferPool implements BufferPool
+- storage: PhysicalStorage
+- frames: BufferFrame[]
+- latches: ReentrantReadWriteLock[]   // per frame; not LockManager
+- pageToFrame: Map<PageId, Integer>
+- clockHand: int
++ DEFAULT_FRAME_COUNT = 64
+    // clock eviction; Phase 3: never evict dirty frames (no-steal until DML WAL)
+    // constructed by DefaultStorageEngine; flushAll on stop()
+
+
+<<concrete>>
+BufferPoolException extends RuntimeException
 
 
 <<interface>>
@@ -872,6 +910,7 @@ no catalog / JSON / SQL / WAL semantics
 + write(file: String, bytes: byte[])
 + read(file: String, offset: long, length: int): byte[]
 + write(file: String, offset: long, bytes: byte[])
++ byteLength(file: String): long   // for BufferPool.newPage next pageId
 + flush(file: String)
 + createDirectory(path: String)
 + deleteDirectory(path: String)        // empty only
@@ -886,7 +925,7 @@ DefaultPhysicalStorage
 - root: Path                    // DataDirectory.root()
 - pageSize: int                 // default 16 KiB; unused by catalog I/O
 + pageSize(): int
-+ create / delete / exists / read / write / flush
++ create / delete / exists / read / write / byteLength / flush
 + createDirectory / deleteDirectory / listDirectories
 
 
@@ -904,16 +943,18 @@ DefaultStorageEngine
 - transactionManager: TransactionManager
 - lockManager: LockManager
 - checkpointScheduler: CheckpointScheduler
-- tableStore: TableStore   // InMemoryTableStore
+- tableStore: TableStore   // InMemoryTableStore (DML)
+- bufferPool: BufferPool   // DefaultBufferPool; unused by DML until Phase 4
 - checkpointEnabled: boolean
 + start()                 // load catalog, replay WAL, seed txnId, optionally start CheckpointScheduler
-+ stop()                  // stop CheckpointScheduler
++ stop()                  // stop CheckpointScheduler; bufferPool.flushAll()
 + dataDirectory(): DataDirectory
 + catalogManager(): CatalogManager
 + transactionManager(): TransactionManager
 + lockManager(): LockManager
 + walManager(): WALManager
 + tableStore(): TableStore
++ bufferPool(): BufferPool
 
 
 <<concrete>>
@@ -1213,8 +1254,9 @@ DatabaseServer
       │              │         └── CommandExecutor: txn → lock → WAL append+flush → CatalogManager (+ TableStore drop)
       │              │         └── CheckpointExecutor: CHECKPOINT → lock → walManager.checkpoint()
       │              ├── TableStore → InMemoryTableStore (RAM rows; temporary)
-      │              ├── (exists, not wired) page layout: HeapPage, RowCodec, RidMap
-      │              └── (later) IndexStore, BufferPool
+      │              ├── BufferPool → DefaultBufferPool (wired; flushAll on stop; DML unused)
+      │              ├── page codecs: HeapPage, RowCodec, RidMap (newPage uses HeapPage)
+      │              └── (later) IndexStore / FileTableStore
       ├── uses ▶ QueryProcessor
       │              │
       │              └── DefaultQueryProcessor coordinates
@@ -1254,7 +1296,7 @@ database-client is a separate Maven module: DatabaseClient REPL over the same le
 
 Catalog (Phase 1.1–1.3):
 CatalogManager is a StorageEngine submodule and owns CatalogStore.
-DefaultStorageEngine constructs PhysicalStorage, DefaultCatalogManager, DefaultWALManager, DefaultUndoManager, DefaultTransactionManager(wal, undo), DefaultLockManager (DETECT_RESOLVE), CheckpointScheduler (strategy from ServerEnvironment), and UndoableTableStore over InMemoryTableStore. start() loads catalog, replays WAL (COMMIT-gated; merges wal.checkpoint maxTxnId), seeds next txnId, starts scheduler if enabled.
+DefaultStorageEngine constructs PhysicalStorage, DefaultCatalogManager, DefaultWALManager, DefaultUndoManager, DefaultTransactionManager(wal, undo), DefaultLockManager (DETECT_RESOLVE), CheckpointScheduler (strategy from ServerEnvironment), UndoableTableStore over InMemoryTableStore, and DefaultBufferPool. start() loads catalog, replays WAL (COMMIT-gated; merges wal.checkpoint maxTxnId), seeds next txnId, starts scheduler if enabled. stop() flushes dirty buffer-pool pages then stops the scheduler.
 start() calls catalogManager.load() — the engine does not touch catalog files.
 createTable assigns ids and writes data/<db>/<table>/catalog.json. Restart: new engine, start, getTable("shop","users").
 CREATE DATABASE creates data/<name>/; DROP DATABASE removes an empty directory (fails if tables remain). load() lists those directories and per-table catalogs.
@@ -1271,4 +1313,9 @@ Page layout (Phase 2):
 HeapPage / RowCodec / Rid / RidMap live under storage.page. Pure codecs over byte[pageSize]; default 16 KiB.
 Header (24 B) + slot directory (4 B × slotCount) + free [lower,upper) + packed row payloads from the high end.
 rowId remains the lock/undo key; Rid=(pageId,slotId) is the heap address. InMemoryRidMap is RAM-only.
-Not constructed by StorageEngine; TableStore is still InMemoryTableStore. BufferPool / file heap come next.
+TableStore is still InMemoryTableStore. BufferPool.newPage writes an empty HeapPage image when extending a file.
+
+BufferPool (Phase 3):
+DefaultBufferPool is constructed by DefaultStorageEngine; pin/unpin, per-frame S/X latch, dirty bit, clock eviction.
+Page key is (file, pageId). Phase 3 never evicts dirty frames (no-steal until DML WAL); flush/flushAll write them.
+stop() calls flushAll(). Catalog JSON and wal.log stay off the pool. DML does not use the pool until FileTableStore.

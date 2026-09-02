@@ -161,6 +161,18 @@ public final class DefaultPhysicalStorage implements PhysicalStorage {
     }
 
     @Override
+    public long byteLength(String file) {
+        Path path = resolve(file);
+        requireExists(file, path);
+        try {
+            // BufferPool.newPage needs length / pageSize as the next pageId; catalog I/O ignores this.
+            return Files.size(path);
+        } catch (IOException e) {
+            throw new PhysicalStorageException("failed to size " + file, e);
+        }
+    }
+
+    @Override
     public void flush(String file) {
         Path path = resolve(file);
         requireExists(file, path);

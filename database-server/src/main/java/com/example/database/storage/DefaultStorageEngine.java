@@ -1,6 +1,8 @@
 package com.example.database.storage;
 
 import com.example.database.config.ServerEnvironment;
+import com.example.database.storage.bufferpool.BufferPool;
+import com.example.database.storage.bufferpool.DefaultBufferPool;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.DefaultCatalogManager;
 import com.example.database.storage.checkpoint.CheckpointScheduler;
@@ -22,8 +24,10 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Owns the data directory, physical files, catalog, transactions, locks, WAL, and
- * optional checkpoint scheduler. Catalog JSON lives inside {@link CatalogManager}, not here.
+ * Owns the data directory, physical files, catalog, transactions, locks, WAL,
+ * buffer pool, and optional checkpoint scheduler. Catalog JSON lives inside
+ * {@link CatalogManager}, not here. DML still uses {@link InMemoryTableStore};
+ * the pool is ready for Phase 4 FileTableStore.
  */
 public final class DefaultStorageEngine implements StorageEngine {
 
@@ -34,6 +38,7 @@ public final class DefaultStorageEngine implements StorageEngine {
     private final TransactionManager transactionManager;
     private final LockManager lockManager;
     private final TableStore tableStore;
+    private final BufferPool bufferPool;
     private final CheckpointScheduler checkpointScheduler;
     // From ServerEnvironment: defaults() leaves this false so unit tests do not start a daemon.
     private final boolean checkpointEnabled;
@@ -54,6 +59,8 @@ public final class DefaultStorageEngine implements StorageEngine {
         this.lockManager = new DefaultLockManager(environment.catalogLockWait());
         InMemoryTableStore heap = new InMemoryTableStore();
         this.tableStore = new UndoableTableStore(heap, undoManager, transactionManager);
+        // Shared by future .ibd heap and .idx trees; Volcano must not call pin.
+        this.bufferPool = new DefaultBufferPool(physicalStorage);
         this.checkpointEnabled = environment.checkpointEnabled();
         // Strategy is chosen once at construction (timeout XOR wal_size). SQL CHECKPOINT
         // does not go through this scheduler — CheckpointExecutor calls walManager directly.
@@ -100,6 +107,16 @@ public final class DefaultStorageEngine implements StorageEngine {
         return tableStore;
     }
 
+    /**
+     * Shared page cache for future {@code .ibd}/{@code .idx} I/O.
+     * Available after {@link #start()}; DML does not pin through it yet.
+     */
+    @Override
+    public BufferPool bufferPool() {
+        requireStarted();
+        return bufferPool;
+    }
+
     @Override
     public void start() {
         if (!running.compareAndSet(false, true)) {
@@ -126,6 +143,8 @@ public final class DefaultStorageEngine implements StorageEngine {
         }
         // Always stop: even if never started (checkpointEnabled=false), stop() is idempotent.
         checkpointScheduler.stop();
+        // Clean shutdown: persist any dirty pages so a restart does not rely on redo (none yet).
+        bufferPool.flushAll();
         System.out.println("[StorageEngine] stopped");
     }
 

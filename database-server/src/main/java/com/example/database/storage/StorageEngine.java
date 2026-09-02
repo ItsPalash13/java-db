@@ -1,5 +1,6 @@
 package com.example.database.storage;
 
+import com.example.database.storage.bufferpool.BufferPool;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.lock.LockManager;
 import com.example.database.storage.table.TableStore;
@@ -21,7 +22,7 @@ import com.example.database.storage.wal.WALManager;
  *   CheckpointScheduler background timeout/size triggers (wired when enabled)
  *   TableStore          row heaps (InMemoryTableStore today; file store later)
  *   IndexStore          index structures (later)
- *   BufferPool          cached persistent blocks/pages (later)
+ *   BufferPool          cached persistent pages for .ibd/.idx (wired; unused by DML yet)
  * </pre>
  */
 public interface StorageEngine {
@@ -29,7 +30,7 @@ public interface StorageEngine {
     /** Prepare storage resources (idempotent). Loads catalog from disk, then replays WAL. */
     void start();
 
-    /** Release storage resources (idempotent). */
+    /** Release storage resources (idempotent). Flushes dirty buffer-pool pages, then stops the checkpoint scheduler. */
     void stop();
 
     /** Store root this engine was constructed with. */
@@ -64,9 +65,19 @@ public interface StorageEngine {
     WALManager walManager();
 
     /**
-     * Row store for DML/DQL. Temporary in-memory heaps until Page / BufferPool exist.
+     * Row store for DML/DQL. Temporary in-memory heaps until FileTableStore (Phase 4).
      *
      * @throws IllegalStateException if storage is not started
      */
     TableStore tableStore();
+
+    /**
+     * Page cache for heap {@code .ibd} / index {@code .idx} files.
+     * Constructed with the engine and flushed on {@link #stop()}; DML still uses
+     * {@link #tableStore()} (in-memory) until FileTableStore pins through this pool.
+     * Volcano operators must never call {@code pin} directly.
+     *
+     * @throws IllegalStateException if storage is not started
+     */
+    BufferPool bufferPool();
 }

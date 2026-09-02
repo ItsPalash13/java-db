@@ -18,6 +18,14 @@ import java.util.Optional;
  * {@code PhysicalStorage} — those are BufferPool / FileTableStore concerns.
  * Deleted slots keep their index (length 0) so a Rid is not reused for a
  * different rowId until the table is rebuilt.
+ *
+ * <pre>
+ *   ColumnType[] types = { ColumnType.INT, ColumnType.VARCHAR, ColumnType.BOOLEAN };
+ *   HeapPage page = HeapPage.createEmpty(0, 256);
+ *   int slot = page.insert(1L, new Object[]{ 1, "Ada", true }, types);
+ *   Tuple t = page.read(slot, types).orElseThrow();
+ *   page.delete(slot);   // tombstone; next insert gets a new slotId
+ * </pre>
  */
 public final class HeapPage {
 
@@ -133,6 +141,9 @@ public final class HeapPage {
         return slotId;
     }
 
+    /**
+     * Decode the live row at {@code slotId}, or empty if the slot is a tombstone (length 0).
+     */
     public Optional<Tuple> read(int slotId, ColumnType[] types) {
         requireSlot(slotId);
         int length = slotLength(slotId);
@@ -173,11 +184,13 @@ public final class HeapPage {
         writeSlot(slotId, 0, 0);
     }
 
+    /** {@code true} if the slot has a non-zero length (not a tombstone). */
     public boolean isLive(int slotId) {
         requireSlot(slotId);
         return slotLength(slotId) != 0;
     }
 
+    /** All live rows in slot order; skips tombstones. */
     public List<Tuple> scanLive(ColumnType[] types) {
         List<Tuple> rows = new ArrayList<>();
         int n = slotCount();

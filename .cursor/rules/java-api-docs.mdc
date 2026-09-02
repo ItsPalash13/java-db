@@ -1,0 +1,86 @@
+---
+description: Require Javadoc on Java types/methods with descriptions and usage examples
+globs: **/*.java
+alwaysApply: true
+---
+
+# Document types and methods (learning DB)
+
+Every new or edited Java **type** and **non-trivial method** must have a short description a student can read without opening another file. Pair this with `.cursor/rules/explain-code-comments.mdc` (why on non-obvious lines). Do **not** replace why-comments with empty “what” restatements.
+
+## What must be documented
+
+| Element | Required |
+|---------|----------|
+| `public` / package-visible **class, interface, enum, record** | Class-level Javadoc: role, layering (what this is **not**), invariants |
+| `public` / package-visible **methods** (including constructors used as API) | Javadoc: purpose, important params/returns, thrown cases that matter |
+| Package-private helpers that encode real policy | Same as public — this is a teaching codebase |
+| Simple getters/setters that only return a field | One-line Javadoc OK, or inherit; no paragraph noise |
+| Test methods | Prefer a clear method name; Javadoc only when the scenario is non-obvious |
+
+When you **edit** a method’s behavior, update its Javadoc in the same change.
+
+## Description style
+
+- Lead with **role** (“RAM cache of disk pages”), not restating the name.
+- Say what layer owns this vs nearby layers (BufferPool ≠ LockManager ≠ WAL ≠ HeapPage).
+- Call out crash/data-loss/concurrency consequences when relevant.
+- Keep it tight: a few sentences, not a novel.
+
+## Examples (when necessary)
+
+Add a short usage example when the call order, lifecycle, or layering is easy to get wrong:
+
+- Pin → latch → mutate → markDirty → unlatch → unpin
+- Create file before `newPage`
+- Codec encode/decode round-trip
+- Anything with “never hold until COMMIT” or similar protocol
+
+**Prefer** a `{@code ...}` or `<pre>` block in the **type** Javadoc (or on the main entry method).
+
+**Alternatively**, if the example spans several types or would clutter the type header, put a single block comment at the **end of the file** (before the closing brace of the top-level type, or after it for package-info-style notes in the same file):
+
+```java
+/*
+ * Example — pin, edit, flush:
+ *
+ *   BufferFrame f = pool.pin(new PageId("t.ibd", 0));
+ *   pool.latchExclusive(f);
+ *   f.data()[0] = 1;
+ *   pool.markDirty(f);
+ *   pool.unlatch(f);
+ *   pool.unpin(f);
+ *   pool.flush(new PageId("t.ibd", 0));
+ */
+```
+
+Do **not** scatter huge tutorial examples between every method. One solid example per type (or end-of-file) is enough unless a method has its own tricky protocol.
+
+## Good / bad
+
+```java
+// BAD — restates the signature
+/** Pins a page. */
+BufferFrame pin(PageId pageId);
+
+// GOOD — role + caller duty + what this is not
+/**
+ * Load or hit {@code pageId} and increment pin count so the frame cannot be evicted.
+ * Caller must {@link #unpin} when done. This is not a SQL lock — use {@code LockManager}
+ * for table/row concurrency; latch separately while touching {@link BufferFrame#data()}.
+ */
+BufferFrame pin(PageId pageId);
+```
+
+```java
+// BAD — example between every method (noise)
+/** ... */ void unpin(...) { }
+/* Example unpin: pool.unpin(f); */
+/** ... */ void flush(...) { }
+
+// GOOD — one example on the type or at end of file
+```
+
+## Scope
+
+Applies when writing or substantially editing Java under this repo (server, tests). Do not invent docs for generated code. Skip one-line private lambdas and obvious test fixtures.

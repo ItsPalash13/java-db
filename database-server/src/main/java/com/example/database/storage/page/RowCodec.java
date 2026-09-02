@@ -14,12 +14,24 @@ import java.util.Objects;
  * Null bits omit the typed bytes (not a typed NULL sentinel). This is the on-page
  * format only — catalog schema still owns column names and nullability rules.
  * Big-endian so the same bytes round-trip across JVMs without relying on host order.
+ * Does not know about pages or slots — {@link HeapPage} owns the slot directory.
+ *
+ * <pre>
+ *   ColumnType[] types = { ColumnType.INT, ColumnType.VARCHAR };
+ *   byte[] bytes = RowCodec.encode(9L, new Object[]{ null, "x" }, types);
+ *   Tuple t = RowCodec.decode(bytes, types);  // values[0] == null
+ * </pre>
  */
 public final class RowCodec {
 
     private RowCodec() {
     }
 
+    /**
+     * Byte length of the payload {@link #encode} would produce (must fit in a u16 slot length).
+     *
+     * @param rowId kept in the signature to match {@link #encode}; always contributes 8 bytes
+     */
     public static int encodedLength(long rowId, Object[] values, ColumnType[] types) {
         validateSchema(values, types);
         int length = Long.BYTES + nullBitmapBytes(types.length);
@@ -37,6 +49,11 @@ public final class RowCodec {
         return length;
     }
 
+    /**
+     * Pack {@code rowId}, null bitmap, and non-null column values in catalog order.
+     *
+     * @throws PageLayoutException on type mismatch, oversized VARCHAR, or &gt; 65535 total bytes
+     */
     public static byte[] encode(long rowId, Object[] values, ColumnType[] types) {
         int length = encodedLength(rowId, values, types);
         ByteBuffer buf = ByteBuffer.allocate(length).order(ByteOrder.BIG_ENDIAN);
@@ -57,6 +74,11 @@ public final class RowCodec {
         return buf.array();
     }
 
+    /**
+     * Unpack a payload produced by {@link #encode} into a {@link Tuple}.
+     *
+     * @throws PageLayoutException if truncated, trailing junk, or bad BOOLEAN byte
+     */
     public static Tuple decode(byte[] payload, ColumnType[] types) {
         Objects.requireNonNull(payload, "payload");
         Objects.requireNonNull(types, "types");
