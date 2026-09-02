@@ -559,6 +559,50 @@ class InMemoryTableStore <<concrete>> {
   +insert / scan / update / delete / dropTable / dropDatabase
 }
 
+class PageLayout <<concrete>> {
+  +{static} DEFAULT_PAGE_SIZE: int
+  +{static} MAGIC / HEADER_SIZE / SLOT_SIZE
+  +{static} OFF_MAGIC … OFF_LSN_RESERVED
+}
+
+enum PageType {
+  HEAP
+}
+
+class Rid <<record>> {
+  +pageId: int
+  +slotId: int
+}
+
+interface RidMap {
+  +put(rowId: long, rid: Rid)
+  +get(rowId: long): Optional<Rid>
+  +remove(rowId: long)
+  +clear()
+}
+
+class InMemoryRidMap <<concrete>> {
+  -byRowId: ConcurrentHashMap<Long, Rid>
+}
+
+class RowCodec <<concrete>> {
+  +{static} encodedLength(rowId, values, types): int
+  +{static} encode(rowId, values, types): byte[]
+  +{static} decode(payload, types): Tuple
+}
+
+class HeapPage <<concrete>> {
+  -data: byte[]
+  -pageSize: int
+  +{static} createEmpty(pageId, pageSize): HeapPage
+  +{static} wrap(data: byte[]): HeapPage
+  +insert(rowId, values, types): int
+  +read(slotId, types): Optional<Tuple>
+  +update / delete / scanLive / freeSpace / toBytes
+}
+
+class PageLayoutException <<concrete>>
+
 interface IndexStore
 
 interface LockManager {
@@ -1076,6 +1120,15 @@ VolcanoOperator ..> Tuple
 ExpressionEvaluator ..> Tuple
 TableStore <|.. InMemoryTableStore
 InMemoryTableStore --> Tuple
+RidMap <|.. InMemoryRidMap
+InMemoryRidMap --> Rid
+HeapPage ..> RowCodec : encode/decode
+HeapPage ..> PageLayout : constants
+HeapPage ..> PageType : HEAP
+HeapPage ..> Tuple : read/scan
+RowCodec ..> ColumnType
+RowCodec ..> Tuple
+HeapPage ..> PageLayoutException : throws
 TransactionControlExecutor --> TransactionManager : begin/commit/rollback
 CheckpointExecutor --> LockManager : runExclusiveCatalog
 CheckpointExecutor --> WALManager : checkpoint

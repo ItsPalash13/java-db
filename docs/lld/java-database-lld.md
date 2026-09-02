@@ -606,6 +606,59 @@ classDiagram
         +insert / scan / update / delete / dropTable / dropDatabase
     }
 
+    class PageLayout {
+        <<concrete>>
+        +DEFAULT_PAGE_SIZE: int
+        +MAGIC / HEADER_SIZE / SLOT_SIZE
+        +OFF_MAGIC … OFF_LSN_RESERVED
+    }
+
+    class PageType {
+        <<enumeration>>
+        HEAP
+    }
+
+    class Rid {
+        <<record>>
+        +int pageId
+        +int slotId
+    }
+
+    class RidMap {
+        <<interface>>
+        +put(long rowId, Rid rid)
+        +get(long rowId) Optional~Rid~
+        +remove(long rowId)
+        +clear()
+    }
+
+    class InMemoryRidMap {
+        <<concrete>>
+        -ConcurrentHashMap~Long, Rid~ byRowId
+    }
+
+    class RowCodec {
+        <<concrete>>
+        +encodedLength(long rowId, Object[] values, ColumnType[] types) int
+        +encode(long rowId, Object[] values, ColumnType[] types) byte[]
+        +decode(byte[] payload, ColumnType[] types) Tuple
+    }
+
+    class HeapPage {
+        <<concrete>>
+        -byte[] data
+        -int pageSize
+        +createEmpty(int pageId, int pageSize) HeapPage
+        +wrap(byte[] data) HeapPage
+        +insert(long rowId, Object[] values, ColumnType[] types) int
+        +read(int slotId, ColumnType[] types) Optional~Tuple~
+        +update / delete / scanLive / freeSpace / toBytes
+    }
+
+    class PageLayoutException {
+        <<concrete>>
+    }
+
     class IndexStore {
         <<interface>>
     }
@@ -1223,6 +1276,15 @@ classDiagram
     ExpressionEvaluator ..> Tuple
     TableStore <|.. InMemoryTableStore
     InMemoryTableStore --> Tuple
+    RidMap <|.. InMemoryRidMap
+    InMemoryRidMap --> Rid
+    HeapPage ..> RowCodec : encode/decode
+    HeapPage ..> PageLayout : constants
+    HeapPage ..> PageType : HEAP
+    HeapPage ..> Tuple : read/scan
+    RowCodec ..> ColumnType
+    RowCodec ..> Tuple
+    HeapPage ..> PageLayoutException : throws
     TransactionControlExecutor --> TransactionManager : begin/commit/rollback
     CheckpointExecutor --> LockManager : runExclusiveCatalog
     CheckpointExecutor --> WALManager : checkpoint

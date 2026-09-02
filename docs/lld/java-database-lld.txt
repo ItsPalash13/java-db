@@ -456,6 +456,7 @@ StorageEngine
 + tableStore(): TableStore   // requires start(); throws if not started
 owns (wired): CatalogManager, PhysicalStorage, TransactionManager, LockManager, WALManager, CheckpointScheduler, UndoableTableStore(InMemoryTableStore)
 owns (stubs, not wired): IndexStore, BufferPool
+exists (codecs only, not wired): HeapPage, RowCodec, RidMap / InMemoryRidMap
 
 
 <<interface>>
@@ -575,6 +576,76 @@ InMemoryTableStore
 + insert / scan / update / delete / dropTable / dropDatabase
     // temporary RAM heaps; lost on restart; not WAL-logged
     // FileTableStore / pages later
+
+
+<<concrete>>
+PageLayout
+constants for slotted page bytes
++ DEFAULT_PAGE_SIZE = 16 KiB
++ MAGIC = 0x4A44, HEADER_SIZE = 24, SLOT_SIZE = 4
++ OFF_MAGIC … OFF_LSN_RESERVED
+    // header + slot directory + free + row payloads; not a BufferPool frame
+
+
+<<enumeration>>
+PageType
+HEAP (= 1)
+    // INDEX pageType arrives with B+ tree (Phase 5)
+
+
+<<record>>
+Rid
+physical heap address (not a lock key)
++ pageId: int
++ slotId: int
+    // disk offset of page = pageId × pageSize
+
+
+<<interface>>
+RidMap
+rowId → Rid for findByRowId without scanning every page
++ put(rowId: long, rid: Rid)
++ get(rowId: long): Optional<Rid>
++ remove(rowId: long)
++ clear()
+
+
+<<concrete>>
+InMemoryRidMap implements RidMap
+- byRowId: ConcurrentHashMap<Long, Rid>
+    // Phase 2 RAM-only; not constructed by StorageEngine; not durable
+
+
+<<concrete>>
+RowCodec
+pack/unpack one row payload (big-endian)
++ encodedLength(rowId, values, ColumnType[]): int
++ encode(rowId, values, ColumnType[]): byte[]
++ decode(payload, ColumnType[]): Tuple
+    // layout: rowId:u64 · null bitmap · INT i32 / VARCHAR u16+UTF-8 / BOOLEAN u8
+    // null bit set → typed bytes omitted
+
+
+<<concrete>>
+HeapPage
+mutable fixed-size slotted HEAP page (byte[])
+- data: byte[]
+- pageSize: int
++ createEmpty(pageId, pageSize): HeapPage
++ wrap(data: byte[]): HeapPage
++ insert(rowId, values, types): int   // returns slotId; does not reuse tombstones
++ read(slotId, types): Optional<Tuple>
++ update(slotId, rowId, values, types)  // in-place only if new payload ≤ old length
++ delete(slotId)   // length=0 tombstone; Rid reserved
++ scanLive(types): List<Tuple>
++ freeSpace / lower / upper / toBytes
+    // pure codec — no pin/latch/flush/PhysicalStorage
+    // not wired into StorageEngine / TableStore yet (Phase 4)
+
+
+<<concrete>>
+PageLayoutException extends RuntimeException
+corrupt page / codec mismatch / page full
 
 
 <<interface>>
@@ -1142,6 +1213,7 @@ DatabaseServer
       │              │         └── CommandExecutor: txn → lock → WAL append+flush → CatalogManager (+ TableStore drop)
       │              │         └── CheckpointExecutor: CHECKPOINT → lock → walManager.checkpoint()
       │              ├── TableStore → InMemoryTableStore (RAM rows; temporary)
+      │              ├── (exists, not wired) page layout: HeapPage, RowCodec, RidMap
       │              └── (later) IndexStore, BufferPool
       ├── uses ▶ QueryProcessor
       │              │
@@ -1194,3 +1266,9 @@ CatalogStore owns JSON and path layout; PhysicalStorage owns bytes.
 PhysicalStorage (Phase 1.2):
 PhysicalStorage is a StorageEngine submodule. DefaultPhysicalStorage is filesystem bytes under DataDirectory.
 No page read/write APIs. Catalog JSON is opaque bytes at this layer.
+
+Page layout (Phase 2):
+HeapPage / RowCodec / Rid / RidMap live under storage.page. Pure codecs over byte[pageSize]; default 16 KiB.
+Header (24 B) + slot directory (4 B × slotCount) + free [lower,upper) + packed row payloads from the high end.
+rowId remains the lock/undo key; Rid=(pageId,slotId) is the heap address. InMemoryRidMap is RAM-only.
+Not constructed by StorageEngine; TableStore is still InMemoryTableStore. BufferPool / file heap come next.
