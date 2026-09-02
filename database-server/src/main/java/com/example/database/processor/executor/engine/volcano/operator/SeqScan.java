@@ -39,15 +39,28 @@ public final class SeqScan implements VolcanoOperator {
     @Override
     public Tuple next() {
         unlockCurrentRow();
-        if (iterator == null || !iterator.hasNext()) {
+        if (iterator == null) {
             return null;
         }
-        Tuple tuple = iterator.next();
-        if (lockManager != null) {
-            lockManager.lockRow(database, table, tuple.rowId(), LockMode.S);
+        while (iterator.hasNext()) {
+            Tuple snapshotRow = iterator.next();
+            long rowId = snapshotRow.rowId();
+            if (lockManager != null) {
+                lockManager.lockRow(database, table, rowId, LockMode.S);
+                // Snapshot from open() can include an uncommitted version; re-read only after
+                // S-lock is granted so rollback/commit while we blocked is visible correctly.
+                Tuple current = tableStore.findByRowId(database, table, rowId).orElse(null);
+                if (current == null) {
+                    lockManager.unlockRow(database, table, rowId, LockMode.S);
+                    continue;
+                }
+                lockedTuple = current;
+                return current;
+            }
+            lockedTuple = snapshotRow;
+            return snapshotRow;
         }
-        lockedTuple = tuple;
-        return tuple;
+        return null;
     }
 
     @Override

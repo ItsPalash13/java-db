@@ -3,6 +3,7 @@ package com.example.database.processor.executor.engine.volcano.operator;
 import com.example.database.processor.analyser.ResolvedAssignment;
 import com.example.database.processor.executor.engine.volcano.ExpressionEvaluator;
 import com.example.database.processor.executor.engine.volcano.Tuple;
+import com.example.database.processor.parser.ast.Expression;
 import com.example.database.storage.lock.LockManager;
 import com.example.database.storage.lock.LockMode;
 import com.example.database.storage.table.TableStore;
@@ -22,6 +23,7 @@ public final class UpdateOperator implements VolcanoOperator {
     private final String database;
     private final String table;
     private final List<ResolvedAssignment> assignments;
+    private final Expression where;
     private final ExpressionEvaluator evaluator;
     private final int columnCount;
 
@@ -32,6 +34,7 @@ public final class UpdateOperator implements VolcanoOperator {
             String database,
             String table,
             List<ResolvedAssignment> assignments,
+            Expression where,
             ExpressionEvaluator evaluator,
             int columnCount
     ) {
@@ -41,6 +44,7 @@ public final class UpdateOperator implements VolcanoOperator {
         this.database = Objects.requireNonNull(database, "database");
         this.table = Objects.requireNonNull(table, "table");
         this.assignments = List.copyOf(Objects.requireNonNull(assignments, "assignments"));
+        this.where = where;
         this.evaluator = Objects.requireNonNull(evaluator, "evaluator");
         if (columnCount < 1) {
             throw new IllegalArgumentException("columnCount must be >= 1");
@@ -56,22 +60,31 @@ public final class UpdateOperator implements VolcanoOperator {
     @Override
     public Tuple next() {
         while (true) {
-            Tuple tuple = child.next();
-            if (tuple == null) {
+            Tuple snapshotRow = child.next();
+            if (snapshotRow == null) {
                 return null;
             }
-            lockManager.lockRow(database, table, tuple.rowId(), LockMode.X);
-            try {
-                Object[] updated = new Object[columnCount];
-                Object[] current = tuple.values();
-                System.arraycopy(current, 0, updated, 0, Math.min(current.length, columnCount));
-                for (ResolvedAssignment assignment : assignments) {
-                    updated[assignment.columnId() - 1] = evaluator.evaluate(assignment.value(), tuple);
-                }
-                tableStore.update(database, table, tuple.rowId(), updated);
-            } finally {
-                lockManager.unlockRow(database, table, tuple.rowId(), LockMode.X);
+            long rowId = snapshotRow.rowId();
+            boolean heldBefore = lockManager.holdsRowExclusive(database, table, rowId);
+            if (!heldBefore) {
+                lockManager.lockRow(database, table, rowId, LockMode.X);
             }
+            // Heap snapshot from scan open() can be stale; WHERE and SET must use live row after X-lock.
+            Tuple current = tableStore.findByRowId(database, table, rowId).orElse(null);
+            if (current == null || (where != null && !evaluator.matches(where, current))) {
+                // Do not drop X held from an earlier statement in the same explicit txn.
+                if (!heldBefore) {
+                    lockManager.unlockRow(database, table, rowId, LockMode.X);
+                }
+                continue;
+            }
+            Object[] updated = new Object[columnCount];
+            Object[] currentValues = current.values();
+            System.arraycopy(currentValues, 0, updated, 0, Math.min(currentValues.length, columnCount));
+            for (ResolvedAssignment assignment : assignments) {
+                updated[assignment.columnId() - 1] = evaluator.evaluate(assignment.value(), current);
+            }
+            tableStore.update(database, table, rowId, updated);
         }
     }
 

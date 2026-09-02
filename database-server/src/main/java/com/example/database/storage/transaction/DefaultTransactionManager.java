@@ -3,8 +3,8 @@ package com.example.database.storage.transaction;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.CatalogSnapshot;
 import com.example.database.storage.lock.LockManager;
-import com.example.database.storage.table.TableSnapshot;
 import com.example.database.storage.table.TableStore;
+import com.example.database.storage.undo.UndoManager;
 import com.example.database.storage.wal.WALManager;
 import com.example.database.storage.wal.WalRecord;
 
@@ -16,21 +16,21 @@ import java.util.function.Supplier;
  * Implicit single-statement and explicit {@code BEGIN} sessions. WAL records carry
  * {@code txnId}; durable flush happens at commit with a trailing {@code COMMIT} record.
  * <p>
- * Explicit sessions defer catalog.json writes and take the catalog lock only on
- * {@link #commitExplicit} (brief persist), not for the whole {@code BEGIN … COMMIT} span.
- * Heap rows are snapshotted at {@link #beginExplicit} and restored on rollback.
+ * DML rollback uses {@link UndoManager}; explicit sessions snapshot catalog only at
+ * {@code BEGIN} and take the catalog lock only on {@link #commitExplicit}.
  */
 public final class DefaultTransactionManager implements TransactionManager {
 
     private final WALManager walManager;
+    private final UndoManager undoManager;
     private final AtomicInteger nextTxnId = new AtomicInteger(1);
     private final AtomicInteger activeExplicitSessions = new AtomicInteger(0);
     private final ThreadLocal<TransactionContext> context = ThreadLocal.withInitial(TransactionContext::new);
-    // Per-thread depth: one implicit txn at a time; explicit sessions reject nested runInTransaction.
     private final ThreadLocal<Integer> implicitDepth = ThreadLocal.withInitial(() -> 0);
 
-    public DefaultTransactionManager(WALManager walManager) {
+    public DefaultTransactionManager(WALManager walManager, UndoManager undoManager) {
         this.walManager = Objects.requireNonNull(walManager, "walManager");
+        this.undoManager = Objects.requireNonNull(undoManager, "undoManager");
     }
 
     @Override
@@ -54,24 +54,49 @@ public final class DefaultTransactionManager implements TransactionManager {
     @Override
     public <T> T runInTransaction(Supplier<T> action) {
         Objects.requireNonNull(action, "action");
-        if (context.get().active()) {
-            throw new IllegalStateException("nested transactions are not supported");
-        }
-        if (implicitDepth.get() > 0) {
-            throw new IllegalStateException("nested transactions are not supported");
-        }
+        ensureNoNestedTransaction();
         implicitDepth.set(1);
         int txnId = allocateTxnId();
         context.get().beginImplicit(txnId);
+        undoManager.clear(txnId);
         try {
             walManager.discardPending();
             T result = action.get();
             commitCurrent(txnId);
+            undoManager.clear(txnId);
             return result;
         } catch (Throwable t) {
-            rollbackCurrent();
+            abortImplicit(txnId, null, null);
             throw t;
         } finally {
+            context.get().clear();
+            implicitDepth.remove();
+        }
+    }
+
+    @Override
+    public <T> T runInTransaction(LockManager lockManager, TableStore tableStore, Supplier<T> action) {
+        Objects.requireNonNull(lockManager, "lockManager");
+        Objects.requireNonNull(tableStore, "tableStore");
+        Objects.requireNonNull(action, "action");
+        ensureNoNestedTransaction();
+        implicitDepth.set(1);
+        int txnId = allocateTxnId();
+        context.get().beginImplicit(txnId);
+        undoManager.clear(txnId);
+        lockManager.bindOwner(txnId);
+        try {
+            walManager.discardPending();
+            T result = action.get();
+            commitCurrent(txnId);
+            undoManager.clear(txnId);
+            return result;
+        } catch (Throwable t) {
+            abortImplicit(txnId, lockManager, tableStore);
+            throw t;
+        } finally {
+            lockManager.unlockAllForOwner();
+            lockManager.clearOwnerBinding();
             context.get().clear();
             implicitDepth.remove();
         }
@@ -87,9 +112,9 @@ public final class DefaultTransactionManager implements TransactionManager {
         }
         int txnId = allocateTxnId();
         CatalogSnapshot catalogSnapshot = catalogManager.snapshot();
-        TableSnapshot tableSnapshot = tableStore.snapshot();
         catalogManager.setDeferPersist(true);
-        context.get().beginExplicit(txnId, catalogSnapshot, tableSnapshot);
+        context.get().beginExplicit(txnId, catalogSnapshot);
+        undoManager.clear(txnId);
         walManager.discardPending();
         activeExplicitSessions.incrementAndGet();
     }
@@ -118,7 +143,7 @@ public final class DefaultTransactionManager implements TransactionManager {
             } catch (RuntimeException e) {
                 catalogManager.setDeferPersist(false);
                 catalogManager.restoreSnapshot(catalogBefore);
-                tableStore.restoreSnapshot(session.tableSnapshot());
+                undoManager.rollback(txnId, tableStore);
                 walManager.discardPending();
                 throw e;
             } finally {
@@ -130,8 +155,10 @@ public final class DefaultTransactionManager implements TransactionManager {
             if (!persisted) {
                 catalogManager.setDeferPersist(false);
                 catalogManager.restoreSnapshot(catalogBefore);
-                tableStore.restoreSnapshot(session.tableSnapshot());
+                undoManager.rollback(txnId, tableStore);
                 walManager.discardPending();
+            } else {
+                undoManager.clear(txnId);
             }
             session.clear();
             activeExplicitSessions.decrementAndGet();
@@ -150,7 +177,7 @@ public final class DefaultTransactionManager implements TransactionManager {
         int txnId = session.txnId();
         catalogManager.setDeferPersist(false);
         catalogManager.restoreSnapshot(session.catalogSnapshot());
-        tableStore.restoreSnapshot(session.tableSnapshot());
+        undoManager.rollback(txnId, tableStore);
         walManager.discardPending();
         lockManager.bindOwner(txnId);
         try {
@@ -180,6 +207,11 @@ public final class DefaultTransactionManager implements TransactionManager {
     }
 
     @Override
+    public boolean active() {
+        return context.get().active();
+    }
+
+    @Override
     public int activeExplicitSessionCount() {
         return activeExplicitSessions.get();
     }
@@ -193,6 +225,28 @@ public final class DefaultTransactionManager implements TransactionManager {
         return session.txnId();
     }
 
+    @Override
+    public IsolationLevel isolationLevel() {
+        return context.get().isolationLevel();
+    }
+
+    @Override
+    public void setIsolationLevel(IsolationLevel level) {
+        context.get().setIsolationLevel(Objects.requireNonNull(level, "level"));
+        if (level == IsolationLevel.REPEATABLE_READ) {
+            throw new UnsupportedOperationException("REPEATABLE READ is not implemented yet");
+        }
+    }
+
+    private void ensureNoNestedTransaction() {
+        if (context.get().active()) {
+            throw new IllegalStateException("nested transactions are not supported");
+        }
+        if (implicitDepth.get() > 0) {
+            throw new IllegalStateException("nested transactions are not supported");
+        }
+    }
+
     private int allocateTxnId() {
         return nextTxnId.getAndIncrement();
     }
@@ -202,7 +256,15 @@ public final class DefaultTransactionManager implements TransactionManager {
         walManager.flush();
     }
 
-    private void rollbackCurrent() {
+    private void abortImplicit(int txnId, LockManager lockManager, TableStore tableStore) {
+        if (tableStore != null) {
+            undoManager.rollback(txnId, tableStore);
+        } else {
+            undoManager.clear(txnId);
+        }
         walManager.discardPending();
+        if (lockManager != null) {
+            lockManager.unlockAllForOwner();
+        }
     }
 }

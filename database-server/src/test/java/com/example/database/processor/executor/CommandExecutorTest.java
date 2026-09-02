@@ -20,6 +20,7 @@ import com.example.database.storage.catalog.TableMetadata;
 import com.example.database.storage.lock.DefaultLockManager;
 import com.example.database.storage.physical.DefaultPhysicalStorage;
 import com.example.database.storage.transaction.DefaultTransactionManager;
+import com.example.database.storage.undo.DefaultUndoManager;
 import com.example.database.storage.wal.DefaultWALManager;
 import com.example.database.storage.wal.WALManager;
 import com.example.database.storage.DataDirectory;
@@ -218,7 +219,7 @@ class CommandExecutorTest {
         WALManager wal = new DefaultWALManager(new DefaultPhysicalStorage(new DataDirectory(tempDir)));
         return new CommandExecutor(
                 catalog,
-                new DefaultTransactionManager(wal),
+                new DefaultTransactionManager(wal, new DefaultUndoManager()),
                 new DefaultLockManager(),
                 wal,
                 new com.example.database.storage.table.InMemoryTableStore()

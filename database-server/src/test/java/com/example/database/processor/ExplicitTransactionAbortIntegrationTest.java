@@ -1,22 +1,23 @@
 package com.example.database.processor;
 
-import com.example.database.processor.executor.QueryResult;
-import com.example.database.storage.DataDirectory;
-import com.example.database.storage.DefaultStorageEngine;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
-
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import com.example.database.processor.executor.QueryResult;
+import com.example.database.storage.DataDirectory;
+import com.example.database.storage.DefaultStorageEngine;
 
 /**
- * Wait-Die abort during explicit txn must roll back heap rows and end the session
+ * Deadlock during explicit txn must undo heap rows and end the session
  * so a follow-up COMMIT cannot persist partial work.
  */
 class ExplicitTransactionAbortIntegrationTest {
@@ -25,53 +26,76 @@ class ExplicitTransactionAbortIntegrationTest {
     Path tempDir;
 
     @Test
-    void waitDieAbortRollsBackInsertsAndEndsExplicitSession() throws Exception {
+    void deadlockAbortRollsBackUpdatesAndEndsExplicitSession() throws Exception {
         DefaultStorageEngine engine = new DefaultStorageEngine(new DataDirectory(tempDir));
         engine.start();
-        DefaultQueryProcessor victim = new DefaultQueryProcessor(engine);
-        DefaultQueryProcessor holder = new DefaultQueryProcessor(engine);
+        DefaultQueryProcessor t1Client = new DefaultQueryProcessor(engine);
+        DefaultQueryProcessor t2Client = new DefaultQueryProcessor(engine);
 
-        victim.executeText("CREATE DATABASE shop");
-        victim.executeText("CREATE TABLE shop.users (id INT, name VARCHAR)");
+        t1Client.executeText("CREATE DATABASE shop");
+        t1Client.executeText("CREATE TABLE shop.users (id INT, name VARCHAR)");
+        t1Client.executeText("INSERT INTO shop.users VALUES (1, 'one')");
+        t1Client.executeText("INSERT INTO shop.users VALUES (2, 'two')");
 
-        CountDownLatch holderInserted = new CountDownLatch(1);
-        CountDownLatch releaseHolder = new CountDownLatch(1);
+        CountDownLatch t1HasRow1 = new CountDownLatch(1);
+        CountDownLatch t2HasRow2 = new CountDownLatch(1);
+        CountDownLatch releaseT1 = new CountDownLatch(1);
+        AtomicReference<QueryResult> t2Result = new AtomicReference<>();
 
-        Thread holderThread = new Thread(() -> {
-            assertEquals("OK", holder.executeText("BEGIN"));
-            assertEquals("OK", holder.executeText("INSERT INTO shop.users VALUES (1, 'holder')"));
-            holderInserted.countDown();
+        Thread t1 = new Thread(() -> {
+            assertEquals("OK", t1Client.executeText("BEGIN"));
+            assertEquals("OK", t1Client.executeText("UPDATE shop.users SET name = 't1-r1' WHERE id = 1"));
+            t1HasRow1.countDown();
             try {
-                releaseHolder.await(10, TimeUnit.SECONDS);
+                t2HasRow2.await(10, TimeUnit.SECONDS);
+                t1Client.execute("UPDATE shop.users SET name = 't1-r2' WHERE id = 2");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } finally {
-                holder.executeText("ROLLBACK");
+                try {
+                    releaseT1.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                t1Client.executeText("ROLLBACK");
             }
         });
 
-        holderThread.start();
-        assertTrue(holderInserted.await(10, TimeUnit.SECONDS));
+        Thread t2 = new Thread(() -> {
+            try {
+                t1HasRow1.await(10, TimeUnit.SECONDS);
+                assertEquals("OK", t2Client.executeText("BEGIN"));
+                assertEquals("OK", t2Client.executeText("UPDATE shop.users SET name = 't2-r2' WHERE id = 2"));
+                t2HasRow2.countDown();
+                t2Result.set(t2Client.execute("UPDATE shop.users SET name = 't2-r1' WHERE id = 1"));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
 
-        assertEquals("OK", victim.executeText("BEGIN"));
-        assertEquals("OK", victim.executeText("INSERT INTO shop.users VALUES (2, 'victim')"));
+        t1.start();
+        t2.start();
+        t2.join(10_000);
 
-        QueryResult select = victim.execute("SELECT name FROM shop.users WHERE id = 1");
-        assertTrue(select.isError());
-        assertTrue(select.toResponse().contains("transaction aborted"));
+        QueryResult abortResult = t2Result.get();
+        assertTrue(abortResult.isError());
+        assertTrue(abortResult.toResponse().contains("transaction aborted"));
 
         assertFalse(engine.transactionManager().inExplicitTransaction());
 
-        QueryResult commitAfterAbort = victim.execute("COMMIT");
+        QueryResult commitAfterAbort = t2Client.execute("COMMIT");
         assertTrue(commitAfterAbort.isError());
-        assertTrue(commitAfterAbort.toResponse().contains("no explicit transaction"));
 
-        releaseHolder.countDown();
-        holderThread.join(10_000);
+        releaseT1.countDown();
+        t1.join(10_000);
 
-        // Victim row 2 must be gone; holder rollback removes row 1 — empty heap proves both.
-        QueryResult after = victim.execute("SELECT * FROM shop.users");
-        assertEquals(List.of(), resultSetRows(after));
+        QueryResult after = t1Client.execute("SELECT id, name FROM shop.users");
+        List<List<Object>> rows = new java.util.ArrayList<>(resultSetRows(after));
+        rows.sort((a, b) -> Integer.compare((Integer) a.get(0), (Integer) b.get(0)));
+        assertEquals(List.of(
+                List.of(1, "one"),
+                List.of(2, "two")
+        ), rows);
 
         engine.stop();
     }

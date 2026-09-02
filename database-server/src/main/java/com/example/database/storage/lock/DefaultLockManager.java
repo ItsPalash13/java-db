@@ -5,10 +5,12 @@ import com.example.database.config.ServerEnvironment;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -62,7 +64,7 @@ public final class DefaultLockManager implements LockManager {
     }
 
     public DefaultLockManager(Duration lockWait) {
-        this(lockWait, DeadlockMode.PREVENT, DeadlockPrevention.WAIT_DIE, DeadlockResolution.ABORT_YOUNGEST);
+        this(lockWait, DeadlockMode.DETECT_RESOLVE, DeadlockPrevention.WAIT_DIE, DeadlockResolution.ABORT_YOUNGEST);
     }
 
     public DefaultLockManager(
@@ -211,7 +213,18 @@ public final class DefaultLockManager implements LockManager {
         if (mode != LockMode.S && mode != LockMode.X) {
             throw new IllegalArgumentException("lockRow expects S or X, got " + mode);
         }
-        acquire(LockKey.row(database, table, rowId), mode, currentOwner());
+        long owner = currentOwner();
+        LockKey key = LockKey.row(database, table, rowId);
+        // READ COMMITTED read-your-writes: X already excludes other writers/readers on this row.
+        if (mode == LockMode.S && ownerHoldsRowExclusive(key, owner)) {
+            return;
+        }
+        acquire(key, mode, owner);
+    }
+
+    @Override
+    public boolean holdsRowExclusive(String database, String table, long rowId) {
+        return ownerHoldsRowExclusive(LockKey.row(database, table, rowId), currentOwner());
     }
 
     @Override
@@ -225,8 +238,19 @@ public final class DefaultLockManager implements LockManager {
      */
     @Override
     public void unlockAllForOwner() {
+        releaseHeldForOwner(mode -> true);
+    }
+
+    /**
+     * Releases S and IS grants only — strict 2PL keeps X/IX until transaction completion.
+     */
+    @Override
+    public void unlockSharedForOwner() {
+        releaseHeldForOwner(mode -> mode == LockMode.S || mode == LockMode.IS);
+    }
+
+    private void releaseHeldForOwner(java.util.function.Predicate<LockMode> shouldRelease) {
         long owner = currentOwner();
-        // Snapshot under mutex, then release outside the bulk snapshot lock — each release() re-locks stateMutex.
         List<HeldLock> snapshot;
         stateMutex.lock();
         try {
@@ -234,10 +258,21 @@ public final class DefaultLockManager implements LockManager {
         } finally {
             stateMutex.unlock();
         }
-        // Reverse order: row locks before table before db intention (LIFO matches typical acquire stack).
         for (int i = snapshot.size() - 1; i >= 0; i--) {
             HeldLock held = snapshot.get(i);
-            release(held.key(), held.mode(), owner);
+            if (shouldRelease.test(held.mode())) {
+                release(held.key(), held.mode(), owner);
+            }
+        }
+    }
+
+    private boolean ownerHoldsRowExclusive(LockKey key, long owner) {
+        stateMutex.lock();
+        try {
+            LockState state = states.get(key);
+            return state != null && state.holderCount(owner, LockMode.X) > 0;
+        } finally {
+            stateMutex.unlock();
         }
     }
 
@@ -414,7 +449,83 @@ public final class DefaultLockManager implements LockManager {
                 return;
             }
         }
-        // DETECT_RESOLVE: build wait-for graph, pick victim per resolution policy — not implemented yet.
+        if (deadlockMode == DeadlockMode.DETECT_RESOLVE) {
+            long victim = detectDeadlockVictim(ownerId, key, mode, state);
+            if (victim >= 0) {
+                woundOwner(victim);
+                if (victim == ownerId) {
+                    throw new TransactionAbortedException(
+                            "transaction aborted (deadlock): txn " + ownerId
+                    );
+                }
+            }
+        }
+    }
+
+    /**
+     * Builds a wait-for graph from queued waiters plus the proposed wait for {@code ownerId}.
+     * Returns the txn id to abort, or {@code -1} if no cycle exists.
+     */
+    private long detectDeadlockVictim(long ownerId, LockKey key, LockMode mode, LockState state) {
+        Map<Long, List<Long>> waitsFor = new HashMap<>();
+        for (Map.Entry<LockKey, LockState> entry : states.entrySet()) {
+            LockState lockState = entry.getValue();
+            for (LockWaiter waiter : lockState.waiters()) {
+                for (long holder : lockState.conflictingHolders(waiter.requestedMode)) {
+                    waitsFor.computeIfAbsent(waiter.ownerId, ignored -> new ArrayList<>()).add(holder);
+                }
+            }
+        }
+        for (long holder : state.conflictingHolders(mode)) {
+            waitsFor.computeIfAbsent(ownerId, ignored -> new ArrayList<>()).add(holder);
+        }
+        if (!createsCycle(ownerId, waitsFor)) {
+            return -1;
+        }
+        Set<Long> cycle = new HashSet<>();
+        collectCycleNodes(ownerId, ownerId, waitsFor, new HashSet<>(), cycle);
+        if (resolution == DeadlockResolution.ABORT_REQUESTER) {
+            return ownerId;
+        }
+        return cycle.stream().max(Long::compare).orElse(ownerId);
+    }
+
+    private static boolean createsCycle(long start, Map<Long, List<Long>> waitsFor) {
+        Set<Long> visited = new HashSet<>();
+        return canReach(start, start, waitsFor, visited);
+    }
+
+    private static boolean canReach(long node, long target, Map<Long, List<Long>> waitsFor, Set<Long> visited) {
+        if (!visited.add(node)) {
+            return false;
+        }
+        for (long next : waitsFor.getOrDefault(node, List.of())) {
+            if (next == target || canReach(next, target, waitsFor, visited)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void collectCycleNodes(
+            long start,
+            long node,
+            Map<Long, List<Long>> waitsFor,
+            Set<Long> visiting,
+            Set<Long> cycle
+    ) {
+        if (!visiting.add(node)) {
+            return;
+        }
+        cycle.add(node);
+        for (long next : waitsFor.getOrDefault(node, List.of())) {
+            if (next == start || visiting.contains(next)) {
+                cycle.add(next);
+            } else {
+                collectCycleNodes(start, next, waitsFor, visiting, cycle);
+            }
+        }
+        visiting.remove(node);
     }
 
     /**

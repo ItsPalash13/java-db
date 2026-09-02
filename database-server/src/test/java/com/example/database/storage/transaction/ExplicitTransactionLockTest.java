@@ -176,7 +176,8 @@ class ExplicitTransactionLockTest {
 
     private TransactionManager newTransactionManager() {
         return new DefaultTransactionManager(
-                new DefaultWALManager(new DefaultPhysicalStorage(new DataDirectory(tempDir)))
+                new DefaultWALManager(new DefaultPhysicalStorage(new DataDirectory(tempDir))),
+                new com.example.database.storage.undo.DefaultUndoManager()
         );
     }
 

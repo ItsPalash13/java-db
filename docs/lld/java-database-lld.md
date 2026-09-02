@@ -366,6 +366,7 @@ classDiagram
         -TableStore tableStore
         -LockManager lockManager
         -TransactionManager transactionManager
+        -CatalogManager catalogManager
         +execute(ExecutionPlan plan) QueryResult
     }
 
@@ -678,13 +679,28 @@ classDiagram
     class DefaultTransactionManager {
         <<concrete>>
         -WALManager walManager
+        -UndoManager undoManager
         -AtomicInteger nextTxnId
         -AtomicInteger activeExplicitSessions
         -ThreadLocal~TransactionContext~ context
         +runInTransaction(Runnable action)
         +runInTransaction(Supplier~T~ action) T
+        +runInTransaction(LockManager, TableStore, Supplier~T~ action) T
         +beginExplicit / commitExplicit / rollbackExplicit
-            // BEGIN: defer catalog persist, no catalog lock; COMMIT: brief catalog X + persist
+            // READ COMMITTED + Strict 2PL; DML undo via UndoManager
+    }
+
+    class UndoManager {
+        <<interface>>
+        +recordInsert / recordUpdate / recordDelete
+        +rollback(txnId, TableStore)
+        +clear(txnId)
+    }
+
+    class IsolationLevel {
+        <<enumeration>>
+        READ_COMMITTED
+        REPEATABLE_READ
     }
 
     class TransactionControlExecutor {

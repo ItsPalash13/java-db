@@ -17,7 +17,11 @@ import com.example.database.storage.lock.LockManager;
 import com.example.database.storage.physical.DefaultPhysicalStorage;
 import com.example.database.storage.transaction.DefaultTransactionManager;
 import com.example.database.storage.transaction.TransactionManager;
+import com.example.database.storage.undo.DefaultUndoManager;
+import com.example.database.storage.undo.UndoManager;
+import com.example.database.storage.table.UndoableTableStore;
 import com.example.database.storage.wal.DefaultWALManager;
+import com.example.database.storage.wal.WALManager;
 import com.example.database.storage.wal.WALManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -116,10 +120,13 @@ class ExplicitTransactionIntegrationTest {
         CatalogManager catalog = new DefaultCatalogManager();
         catalog.createDatabase("shop");
         WALManager wal = new DefaultWALManager(new DefaultPhysicalStorage(new DataDirectory(tempDir)));
-        TransactionManager tx = new DefaultTransactionManager(wal);
+        UndoManager undo = new DefaultUndoManager();
+        TransactionManager tx = new DefaultTransactionManager(wal, undo);
         LockManager lock = new DefaultLockManager();
-        com.example.database.storage.table.InMemoryTableStore tableStore =
+        com.example.database.storage.table.InMemoryTableStore heap =
                 new com.example.database.storage.table.InMemoryTableStore();
+        com.example.database.storage.table.TableStore tableStore =
+                new UndoableTableStore(heap, undo, tx);
         CommandExecutor ddl = new CommandExecutor(
                 catalog,
                 tx,

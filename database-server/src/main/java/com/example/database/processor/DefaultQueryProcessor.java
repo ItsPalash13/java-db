@@ -175,7 +175,8 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             VolcanoExecutor volcano = new VolcanoExecutor(
                     storageEngine.tableStore(),
                     storageEngine.lockManager(),
-                    storageEngine.transactionManager()
+                    storageEngine.transactionManager(),
+                    storageEngine.catalogManager()
             );
             registry.register(QueryType.CREATE_TABLE, commands);
             registry.register(QueryType.DROP_TABLE, commands);

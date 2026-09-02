@@ -1,6 +1,7 @@
 package com.example.database.storage.transaction;
 
 import com.example.database.storage.catalog.CatalogManager;
+import com.example.database.storage.undo.DefaultUndoManager;
 import com.example.database.storage.wal.WALManager;
 import com.example.database.storage.wal.WalRecord;
 import org.junit.jupiter.api.Test;
@@ -16,7 +17,7 @@ class DefaultTransactionManagerTest {
     @Test
     void runInTransactionReturnsSupplierResultOnSuccess() {
         FakeWal wal = new FakeWal();
-        TransactionManager tx = new DefaultTransactionManager(wal);
+        TransactionManager tx = new DefaultTransactionManager(wal, new DefaultUndoManager());
 
         String result = tx.runInTransaction(() -> "ok");
 
@@ -27,7 +28,7 @@ class DefaultTransactionManagerTest {
     @Test
     void runInTransactionPropagatesFailureAndDiscardsPending() {
         FakeWal wal = new FakeWal();
-        TransactionManager tx = new DefaultTransactionManager(wal);
+        TransactionManager tx = new DefaultTransactionManager(wal, new DefaultUndoManager());
         AtomicInteger calls = new AtomicInteger();
 
         RuntimeException ex = assertThrows(
@@ -45,7 +46,7 @@ class DefaultTransactionManagerTest {
 
     @Test
     void rejectsNestedTransactions() {
-        TransactionManager tx = new DefaultTransactionManager(new FakeWal());
+        TransactionManager tx = new DefaultTransactionManager(new FakeWal(), new DefaultUndoManager());
 
         IllegalStateException ex = assertThrows(
                 IllegalStateException.class,
@@ -59,7 +60,7 @@ class DefaultTransactionManagerTest {
 
     @Test
     void sequentialTransactionsAreAllowedOnSameThread() {
-        TransactionManager tx = new DefaultTransactionManager(new FakeWal());
+        TransactionManager tx = new DefaultTransactionManager(new FakeWal(), new DefaultUndoManager());
 
         assertEquals(1, tx.runInTransaction(() -> 1));
         assertEquals(2, tx.runInTransaction(() -> 2));

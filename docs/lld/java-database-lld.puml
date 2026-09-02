@@ -345,6 +345,7 @@ class VolcanoExecutor <<concrete>> {
   -tableStore: TableStore
   -lockManager: LockManager
   -transactionManager: TransactionManager
+  -catalogManager: CatalogManager
   +execute(plan: ExecutionPlan): QueryResult
 }
 
@@ -629,15 +630,23 @@ interface TransactionManager {
 
 class DefaultTransactionManager <<concrete>> {
   -walManager: WALManager
+  -undoManager: UndoManager
   -nextTxnId: AtomicInteger
   -activeExplicitSessions: AtomicInteger
   -context: ThreadLocal<TransactionContext>
   +runInTransaction(action: Runnable)
   +runInTransaction(action: Supplier<T>): T
+  +runInTransaction(LockManager, TableStore, Supplier<T>): T
   +beginExplicit()
   +commitExplicit()
   +rollbackExplicit()
-    note right: BEGIN defers catalog persist;\nCOMMIT takes brief catalog X
+    note right: READ COMMITTED;\nDML undo via UndoManager
+}
+
+interface UndoManager {
+  +recordInsert / recordUpdate / recordDelete
+  +rollback(txnId, TableStore)
+  +clear(txnId)
 }
 
 class TransactionControlExecutor <<concrete>> {
@@ -1073,6 +1082,7 @@ CheckpointExecutor --> WALManager : checkpoint
 CheckpointExecutor --> TransactionManager : reject if explicit
 TransactionManager <|.. DefaultTransactionManager
 DefaultTransactionManager --> WALManager : flush COMMIT / discard
+DefaultTransactionManager --> UndoManager : rollback / clear
 LockManager <|.. DefaultLockManager
 WALManager <|.. DefaultWALManager
 DefaultWALManager --> PhysicalStorage : wal.log

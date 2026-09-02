@@ -3,6 +3,7 @@ package com.example.database.storage.table;
 import com.example.database.processor.executor.engine.volcano.Tuple;
 
 import java.util.Iterator;
+import java.util.Optional;
 
 /**
  * Owns actual table data (rows for user tables). Does not own schema —
@@ -40,4 +41,13 @@ public interface TableStore {
 
     /** Restores heap rows from a {@link #snapshot()} taken at {@code BEGIN}. */
     void restoreSnapshot(TableSnapshot snapshot);
+
+    /** Returns one row by id for undo capture before UPDATE/DELETE. */
+    Optional<Tuple> findByRowId(String database, String table, long rowId);
+
+    /**
+     * Re-inserts a row with a fixed {@code rowId} during undo of DELETE.
+     * Not used for normal INSERT — {@link #insert} assigns ids.
+     */
+    void restoreRow(String database, String table, Tuple tuple);
 }

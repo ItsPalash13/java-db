@@ -25,37 +25,33 @@ public interface TransactionManager {
     <T> T runInTransaction(Supplier<T> action);
 
     /**
+     * Implicit txn with lock release after commit/abort. Volcano DML uses this path.
+     */
+    <T> T runInTransaction(LockManager lockManager, TableStore tableStore, Supplier<T> action);
+
+    /**
      * Seeds the next txn id after WAL replay on storage start.
      */
     void seedNextTxnId(int nextTxnId);
 
-    /**
-     * Starts an explicit client transaction on this thread. Defers catalog.json writes until
-     * {@link #commitExplicit}; does not hold the catalog lock for the whole session so other
-     * connections can {@code BEGIN} concurrently.
-     *
-     * @throws IllegalStateException if a transaction is already active on this thread
-     */
     void beginExplicit(LockManager lockManager, CatalogManager catalogManager, TableStore tableStore);
 
     void commitExplicit(LockManager lockManager, CatalogManager catalogManager, TableStore tableStore);
 
     void rollbackExplicit(LockManager lockManager, CatalogManager catalogManager, TableStore tableStore);
 
-    /**
-     * Client disconnected: roll back an open explicit txn on this thread and release
-     * scoped locks. Safe to call when no transaction is active.
-     */
     void endConnectionSession(LockManager lockManager, CatalogManager catalogManager, TableStore tableStore);
 
-    /** Whether this thread is inside an explicit {@code BEGIN} session. */
     boolean inExplicitTransaction();
 
-    /** Open explicit sessions anywhere in the process (used to defer CHECKPOINT). */
+    /** Whether this thread has an implicit or explicit transaction open. */
+    boolean active();
+
     int activeExplicitSessionCount();
 
-    /**
-     * Active txn id for WAL append on this thread, or throws if none.
-     */
     int currentTxnId();
+
+    IsolationLevel isolationLevel();
+
+    void setIsolationLevel(IsolationLevel level);
 }

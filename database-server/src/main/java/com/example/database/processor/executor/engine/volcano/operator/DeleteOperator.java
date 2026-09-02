@@ -1,6 +1,8 @@
 package com.example.database.processor.executor.engine.volcano.operator;
 
+import com.example.database.processor.executor.engine.volcano.ExpressionEvaluator;
 import com.example.database.processor.executor.engine.volcano.Tuple;
+import com.example.database.processor.parser.ast.Expression;
 import com.example.database.storage.lock.LockManager;
 import com.example.database.storage.lock.LockMode;
 import com.example.database.storage.table.TableStore;
@@ -17,19 +19,25 @@ public final class DeleteOperator implements VolcanoOperator {
     private final LockManager lockManager;
     private final String database;
     private final String table;
+    private final Expression where;
+    private final ExpressionEvaluator evaluator;
 
     public DeleteOperator(
             VolcanoOperator child,
             TableStore tableStore,
             LockManager lockManager,
             String database,
-            String table
+            String table,
+            Expression where,
+            ExpressionEvaluator evaluator
     ) {
         this.child = Objects.requireNonNull(child, "child");
         this.tableStore = Objects.requireNonNull(tableStore, "tableStore");
         this.lockManager = Objects.requireNonNull(lockManager, "lockManager");
         this.database = Objects.requireNonNull(database, "database");
         this.table = Objects.requireNonNull(table, "table");
+        this.where = where;
+        this.evaluator = Objects.requireNonNull(evaluator, "evaluator");
     }
 
     @Override
@@ -40,16 +48,23 @@ public final class DeleteOperator implements VolcanoOperator {
     @Override
     public Tuple next() {
         while (true) {
-            Tuple tuple = child.next();
-            if (tuple == null) {
+            Tuple snapshotRow = child.next();
+            if (snapshotRow == null) {
                 return null;
             }
-            lockManager.lockRow(database, table, tuple.rowId(), LockMode.X);
-            try {
-                tableStore.delete(database, table, tuple.rowId());
-            } finally {
-                lockManager.unlockRow(database, table, tuple.rowId(), LockMode.X);
+            long rowId = snapshotRow.rowId();
+            boolean heldBefore = lockManager.holdsRowExclusive(database, table, rowId);
+            if (!heldBefore) {
+                lockManager.lockRow(database, table, rowId, LockMode.X);
             }
+            Tuple current = tableStore.findByRowId(database, table, rowId).orElse(null);
+            if (current == null || (where != null && !evaluator.matches(where, current))) {
+                if (!heldBefore) {
+                    lockManager.unlockRow(database, table, rowId, LockMode.X);
+                }
+                continue;
+            }
+            tableStore.delete(database, table, rowId);
         }
     }
 

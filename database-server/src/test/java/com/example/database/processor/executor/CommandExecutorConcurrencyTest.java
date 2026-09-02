@@ -11,6 +11,7 @@ import com.example.database.storage.lock.DefaultLockManager;
 import com.example.database.storage.lock.LockManager;
 import com.example.database.storage.physical.DefaultPhysicalStorage;
 import com.example.database.storage.transaction.DefaultTransactionManager;
+import com.example.database.storage.undo.DefaultUndoManager;
 import com.example.database.storage.wal.DefaultWALManager;
 import com.example.database.storage.wal.WALManager;
 import org.junit.jupiter.api.Test;
@@ -42,7 +43,7 @@ class CommandExecutorConcurrencyTest {
         WALManager wal = new DefaultWALManager(new DefaultPhysicalStorage(new DataDirectory(tempDir)));
         CommandExecutor executor = new CommandExecutor(
                 catalog,
-                new DefaultTransactionManager(wal),
+                new DefaultTransactionManager(wal, new DefaultUndoManager()),
                 locks,
                 wal,
                 new com.example.database.storage.table.InMemoryTableStore()

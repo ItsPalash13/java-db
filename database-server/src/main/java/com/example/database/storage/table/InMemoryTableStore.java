@@ -9,6 +9,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -104,6 +105,40 @@ public final class InMemoryTableStore implements TableStore {
             tables.put(entry.getKey(), Collections.synchronizedList(copyRows(entry.getValue())));
         }
         nextRowId.set(snapshot.nextRowId());
+    }
+
+    @Override
+    public Optional<Tuple> findByRowId(String database, String table, long rowId) {
+        List<Tuple> rows = tables.get(key(database, table));
+        if (rows == null) {
+            return Optional.empty();
+        }
+        synchronized (rows) {
+            for (Tuple row : rows) {
+                if (row.rowId() == rowId) {
+                    return Optional.of(row);
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    @Override
+    public void restoreRow(String database, String table, Tuple tuple) {
+        Objects.requireNonNull(tuple, "tuple");
+        String tableKey = key(database, table);
+        List<Tuple> rows = tables.computeIfAbsent(tableKey, ignored -> Collections.synchronizedList(new ArrayList<>()));
+        synchronized (rows) {
+            for (int i = 0; i < rows.size(); i++) {
+                if (rows.get(i).rowId() == tuple.rowId()) {
+                    rows.set(i, new Tuple(tuple.rowId(), tuple.values().clone()));
+                    return;
+                }
+            }
+            rows.add(new Tuple(tuple.rowId(), tuple.values().clone()));
+        }
+        // Undo may restore a high rowId after other inserts in the same txn — keep counter monotonic.
+        nextRowId.updateAndGet(current -> Math.max(current, tuple.rowId() + 1));
     }
 
     private static List<Tuple> copyRows(List<Tuple> rows) {

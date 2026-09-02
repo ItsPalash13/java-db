@@ -13,6 +13,7 @@ import com.example.database.storage.catalog.DefaultCatalogManager;
 import com.example.database.storage.lock.DefaultLockManager;
 import com.example.database.storage.physical.DefaultPhysicalStorage;
 import com.example.database.storage.transaction.DefaultTransactionManager;
+import com.example.database.storage.undo.DefaultUndoManager;
 import com.example.database.storage.wal.DefaultWALManager;
 import com.example.database.storage.wal.WALManager;
 import org.junit.jupiter.api.Test;
@@ -40,7 +41,7 @@ class QueryDispatcherTest {
                 QueryType.CREATE_TABLE,
                 new CommandExecutor(
                         catalog,
-                        new DefaultTransactionManager(wal),
+                        new DefaultTransactionManager(wal, new DefaultUndoManager()),
                         new DefaultLockManager(),
                         wal,
                         new com.example.database.storage.table.InMemoryTableStore()

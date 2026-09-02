@@ -10,8 +10,11 @@ import com.example.database.storage.physical.DefaultPhysicalStorage;
 import com.example.database.storage.physical.PhysicalStorage;
 import com.example.database.storage.table.InMemoryTableStore;
 import com.example.database.storage.table.TableStore;
+import com.example.database.storage.table.UndoableTableStore;
 import com.example.database.storage.transaction.DefaultTransactionManager;
 import com.example.database.storage.transaction.TransactionManager;
+import com.example.database.storage.undo.DefaultUndoManager;
+import com.example.database.storage.undo.UndoManager;
 import com.example.database.storage.wal.DefaultWALManager;
 import com.example.database.storage.wal.WALManager;
 
@@ -46,10 +49,11 @@ public final class DefaultStorageEngine implements StorageEngine {
         this.physicalStorage = new DefaultPhysicalStorage(dataDirectory);
         this.catalogManager = new DefaultCatalogManager(physicalStorage);
         this.walManager = new DefaultWALManager(physicalStorage);
-        this.transactionManager = new DefaultTransactionManager(walManager);
+        UndoManager undoManager = new DefaultUndoManager();
+        this.transactionManager = new DefaultTransactionManager(walManager, undoManager);
         this.lockManager = new DefaultLockManager(environment.catalogLockWait());
-        // Temporary RAM heaps for Volcano; replaced by a file TableStore later.
-        this.tableStore = new InMemoryTableStore();
+        InMemoryTableStore heap = new InMemoryTableStore();
+        this.tableStore = new UndoableTableStore(heap, undoManager, transactionManager);
         this.checkpointEnabled = environment.checkpointEnabled();
         // Strategy is chosen once at construction (timeout XOR wal_size). SQL CHECKPOINT
         // does not go through this scheduler — CheckpointExecutor calls walManager directly.

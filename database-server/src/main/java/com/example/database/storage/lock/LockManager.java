@@ -39,8 +39,17 @@ public interface LockManager {
 
     void lockRow(String database, String table, long rowId, LockMode mode);
 
+    /** Whether the bound owner already holds row X (e.g. from an earlier statement in the same txn). */
+    boolean holdsRowExclusive(String database, String table, long rowId);
+
     void unlockRow(String database, String table, long rowId, LockMode mode);
 
     /** Drops every scoped lock held by the bound owner on this thread. */
     void unlockAllForOwner();
+
+    /**
+     * READ COMMITTED: release shared locks (S, IS) at statement end while keeping X/IX
+     * until {@link #unlockAllForOwner()} on COMMIT/ABORT.
+     */
+    void unlockSharedForOwner();
 }
