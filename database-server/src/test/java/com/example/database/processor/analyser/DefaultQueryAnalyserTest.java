@@ -564,7 +564,7 @@ class DefaultQueryAnalyserTest {
     @Test
     void rejectsDropColumnWhenIndexReferencesColumn() {
         CatalogManager catalog = catalogWithShop();
-        TableMetadata users = catalog.createTable(TableMetadata.define(
+        catalog.createTable(TableMetadata.define(
                 "shop",
                 "users",
                 List.of(
@@ -606,6 +606,7 @@ class DefaultQueryAnalyserTest {
         assertEquals("users", analyzed.table());
         assertEquals("idx_users_id", analyzed.index());
         assertEquals(List.of(1), analyzed.columnIds());
+        assertEquals(false, analyzed.unique());
         assertTrue(catalog.getTable("shop", "users").orElseThrow().indexes().isEmpty());
     }
 
@@ -633,7 +634,7 @@ class DefaultQueryAnalyserTest {
     @Test
     void rejectsCreateIndexWhenNameAlreadyExists() {
         CatalogManager catalog = catalogWithShop();
-        TableMetadata users = catalog.createTable(TableMetadata.define(
+        catalog.createTable(TableMetadata.define(
                 "shop",
                 "users",
                 List.of(ColumnMetadata.define("id", ColumnType.INT))

@@ -12,12 +12,20 @@ public final class AnalyzedCreateIndex implements AnalyzedQuery {
     private final String table;
     private final String index;
     private final List<Integer> columnIds;
+    private final boolean unique;
 
-    public AnalyzedCreateIndex(String database, String table, String index, List<Integer> columnIds) {
+    public AnalyzedCreateIndex(
+            String database,
+            String table,
+            String index,
+            List<Integer> columnIds,
+            boolean unique
+    ) {
         this.database = Objects.requireNonNull(database, "database");
         this.table = Objects.requireNonNull(table, "table");
         this.index = Objects.requireNonNull(index, "index");
         this.columnIds = List.copyOf(Objects.requireNonNull(columnIds, "columnIds"));
+        this.unique = unique;
         if (columnIds.isEmpty()) {
             throw new IllegalArgumentException("columnIds must not be empty");
         }
@@ -37,6 +45,10 @@ public final class AnalyzedCreateIndex implements AnalyzedQuery {
 
     public List<Integer> columnIds() {
         return columnIds;
+    }
+
+    public boolean unique() {
+        return unique;
     }
 
     @Override

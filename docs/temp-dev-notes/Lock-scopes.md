@@ -37,13 +37,25 @@ That was correct while the only shared mutable state was catalog JSON. DML adds 
 ## Hierarchy (coarse → fine)
 
 ```text
-engine / catalog     DROP DATABASE names, CHECKPOINT, nextTableId
+engine               CHECKPOINT X; DML/DQL/DDL take IS/IX
+  catalog            schema persist / id allocation (short ReentrantLock path)
   database  shop     everything in that database
     table   users    rows + indexes of that table
-      row   id=1     one record (later)
+      row   id=1     one record
 ```
 
-**Acquire order:** coarse before fine, always. Never take a row lock then the table lock. Same order for every session keeps deadlock rare until row locks or SQL-order multi-table txns.
+**Acquire order:** ENGINE before catalog/database/table/row, always. Never take a row lock then the table lock.
+
+**ENGINE modes:**
+
+| Work | ENGINE mode | Duration |
+|------|-------------|----------|
+| `SELECT` | **IS** | Statement end (with S/IS via `unlockSharedForOwner`) |
+| `INSERT` / `UPDATE` / `DELETE` | **IX** | Until COMMIT/ROLLBACK |
+| Table/database DDL | **IX** | Statement |
+| `CHECKPOINT` | **X** | Checkpoint only |
+
+`ENGINE X` conflicts with `IS` and `IX` → everyone queues. Writers use **IX** (not IS) so `unlockSharedForOwner` does not drop ENGINE before COMMIT.
 
 **Intention (why database locks exist):** if session A holds `shop.users` S, session B’s `DROP DATABASE shop` must wait. B cannot see every table lock unless A also left a mark on **database `shop`**. That mark is an **intention** lock:
 
@@ -53,7 +65,7 @@ engine / catalog     DROP DATABASE names, CHECKPOINT, nextTableId
 | table X | database **IX** (intent exclusive) |
 | DROP DATABASE | database **X** (conflicts with IS and IX) |
 
-Without IS/IX, `DROP DATABASE` has nothing to wait on except “scan all table locks” or “take the old catalog mutex again.” For this project, **table S/X + database IS/IX/X** is the real scoped model. Skip row locks until table X is too coarse.
+Without IS/IX, `DROP DATABASE` has nothing to wait on except “scan all table locks” or “take the old catalog mutex again.” For this project, **ENGINE + table S/X + database IS/IX/X** is the scoped model.
 
 Do **not** put page or B+Tree node in this hierarchy. Those are **latches** (short, in BufferPool / tree code) so two threads do not tear a page. They are not SQL locks and they must not be held until COMMIT.
 
@@ -87,25 +99,27 @@ Compatibility:
 
 | Statement | Scope + mode | Why |
 |-----------|----------------|-----|
-| `SELECT … FROM shop.users` | `shop` IS + `users` S | Concurrent readers; block writers/DDL on `users` |
-| `INSERT` / `UPDATE` / `DELETE` `shop.users` | `shop` IX + `users` X | Whole-table X until row locks |
-| `CREATE TABLE shop.users` | `shop` IX + `users` X (name reservation) | Two sessions must not create the same name; other tables stay free |
-| `DROP TABLE` / `ALTER ADD\|DROP COLUMN` / `CREATE\|DROP INDEX` | `shop` IX + `users` X | Schema + later heap/index files for that table |
-| `CREATE DATABASE shop` | catalog/database-name X for `shop` | No tables yet |
-| `DROP DATABASE shop` | `shop` X | Must wait for every IS/IX on `shop` |
+| `SELECT … FROM shop.users` | ENGINE IS + `shop` IS + `users` IS + row S | Concurrent readers; block CHECKPOINT X |
+| `INSERT` / `UPDATE` / `DELETE` `shop.users` | ENGINE IX + `shop` IX + `users` IX + row X | Writers until COMMIT; block CHECKPOINT X |
+| `CREATE TABLE shop.users` | ENGINE IX + `shop` IX + `users` X + catalog | Two sessions must not create the same name; other tables stay free |
+| `DROP TABLE` / `ALTER ADD\|DROP COLUMN` / `CREATE\|DROP INDEX` | ENGINE IX + `shop` IX + `users` X + catalog | Schema + heap/index files for that table |
+| `CREATE DATABASE shop` | ENGINE IX + catalog X | No tables yet |
+| `DROP DATABASE shop` | ENGINE IX + `shop` X + catalog | Must wait for every IS/IX on `shop` |
 | `BEGIN` | **nothing** | Session starts empty; first statement takes the locks above |
 | `COMMIT` / `ROLLBACK` | release all held | Duration, not a new scope |
-| `CHECKPOINT` | keep a **global** exclusive (catalog or engine) | Must not race catalog persist / WAL fence; not a table lock |
+| `CHECKPOINT` | ENGINE **X** then catalog X | Quiesce all DML/DQL/DDL; WAL fence |
 | `DESCRIBE` / `SHOW` | optional: catalog read or table IS+S | Read-only metadata; can stay lock-free at first if SHOW may be stale |
 
-Same matrix as `lock-timing.md` for DML vs DDL on one table:
+Same matrix for DML vs DDL on one table (and ENGINE quiesce):
 
 | Situation | Allow? |
 |-----------|--------|
-| `SELECT shop.users` + `SELECT shop.users` | Yes (both S) |
-| `SELECT shop.users` + `INSERT shop.users` | No (writer needs X) |
+| `SELECT shop.users` + `SELECT shop.users` | Yes (both ENGINE IS) |
+| `SELECT shop.users` + `INSERT shop.users` | No (writer needs row/table conflict) |
 | `SELECT shop.users` + `DROP TABLE shop.users` | No — DROP waits for SELECT |
 | `SELECT shop.users` + `CREATE TABLE shop.orders` | Yes (different table) |
+| `INSERT shop.orders` + table DDL on `users` | Yes (ENGINE IX+IX; different table) |
+| Any DML/DQL/DDL + `CHECKPOINT` | No — ENGINE X queues everyone |
 | `SELECT shop.users` + `DROP DATABASE shop` | No — database X vs IS |
 
 ---

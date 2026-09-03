@@ -15,6 +15,7 @@ import com.example.database.storage.physical.DefaultPhysicalStorage;
 import com.example.database.storage.transaction.DefaultTransactionManager;
 import com.example.database.storage.undo.DefaultUndoManager;
 import com.example.database.storage.wal.DefaultWALManager;
+import com.example.database.storage.index.NoopIndexStore;
 import com.example.database.storage.wal.WALManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -44,7 +45,8 @@ class QueryDispatcherTest {
                         new DefaultTransactionManager(wal, new DefaultUndoManager()),
                         new DefaultLockManager(),
                         wal,
-                        new com.example.database.storage.table.InMemoryTableStore()
+                        new com.example.database.storage.table.InMemoryTableStore(),
+                        new NoopIndexStore()
                 )
         );
         QueryDispatcher dispatcher = new QueryDispatcher(registry);

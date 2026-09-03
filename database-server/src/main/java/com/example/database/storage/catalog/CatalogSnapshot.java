@@ -39,7 +39,7 @@ public final class CatalogSnapshot {
         return nextTableId;
     }
 
-    List<TableMetadata> allTables() {
+    public List<TableMetadata> allTables() {
         List<TableMetadata> tables = new java.util.ArrayList<>();
         for (Map<String, TableMetadata> perDatabase : tablesByDatabase.values()) {
             tables.addAll(perDatabase.values());

@@ -10,9 +10,14 @@ import com.example.database.storage.lock.DefaultLockManager;
 import com.example.database.storage.lock.LockManager;
 import com.example.database.storage.physical.DefaultPhysicalStorage;
 import com.example.database.storage.physical.PhysicalStorage;
-import com.example.database.storage.table.InMemoryTableStore;
+import com.example.database.storage.index.IndexStore;
+import com.example.database.storage.table.FileTableStore;
 import com.example.database.storage.table.TableStore;
 import com.example.database.storage.table.UndoableTableStore;
+import com.example.database.storage.index.FileIndexStore;
+import com.example.database.storage.index.IndexMaintainer;
+import com.example.database.storage.index.IndexPageWal;
+import com.example.database.storage.catalog.TableMetadata;
 import com.example.database.storage.transaction.DefaultTransactionManager;
 import com.example.database.storage.transaction.TransactionManager;
 import com.example.database.storage.undo.DefaultUndoManager;
@@ -26,8 +31,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Owns the data directory, physical files, catalog, transactions, locks, WAL,
  * buffer pool, and optional checkpoint scheduler. Catalog JSON lives inside
- * {@link CatalogManager}, not here. DML still uses {@link InMemoryTableStore};
- * the pool is ready for Phase 4 FileTableStore.
+ * {@link CatalogManager}, not here. DML uses {@link FileTableStore} on disk
+ * {@code .ibd} heaps through the shared buffer pool.
  */
 public final class DefaultStorageEngine implements StorageEngine {
 
@@ -38,6 +43,9 @@ public final class DefaultStorageEngine implements StorageEngine {
     private final TransactionManager transactionManager;
     private final LockManager lockManager;
     private final TableStore tableStore;
+    private final IndexStore indexStore;
+    private final FileTableStore fileTableStore;
+    private final IndexPageWal indexPageWal;
     private final BufferPool bufferPool;
     private final CheckpointScheduler checkpointScheduler;
     // From ServerEnvironment: defaults() leaves this false so unit tests do not start a daemon.
@@ -54,22 +62,44 @@ public final class DefaultStorageEngine implements StorageEngine {
         this.physicalStorage = new DefaultPhysicalStorage(dataDirectory);
         this.catalogManager = new DefaultCatalogManager(physicalStorage);
         this.walManager = new DefaultWALManager(physicalStorage);
-        UndoManager undoManager = new DefaultUndoManager();
-        this.transactionManager = new DefaultTransactionManager(walManager, undoManager);
-        this.lockManager = new DefaultLockManager(environment.catalogLockWait());
-        InMemoryTableStore heap = new InMemoryTableStore();
-        this.tableStore = new UndoableTableStore(heap, undoManager, transactionManager);
-        // Shared by future .ibd heap and .idx trees; Volcano must not call pin.
         this.bufferPool = new DefaultBufferPool(physicalStorage);
+        IndexPageWal indexPageWal = new IndexPageWal(physicalStorage);
+        if (bufferPool instanceof DefaultBufferPool defaultBufferPool) {
+            defaultBufferPool.setPageFlushHook(indexPageWal::logPageWrite);
+            defaultBufferPool.setWalManager(walManager);
+        }
+        this.indexStore = new FileIndexStore(bufferPool, physicalStorage);
+        UndoManager undoManager = new DefaultUndoManager(indexStore);
+        this.transactionManager = new DefaultTransactionManager(walManager, undoManager, indexStore);
+        this.lockManager = new DefaultLockManager(environment.catalogLockWait());
+        IndexMaintainer indexMaintainer = new IndexMaintainer(
+                catalogManager,
+                indexStore,
+                transactionManager,
+                walManager
+        );
+        FileTableStore heap = new FileTableStore(
+                catalogManager,
+                bufferPool,
+                physicalStorage,
+                indexMaintainer,
+                walManager,
+                transactionManager
+        );
+        this.tableStore = new UndoableTableStore(heap, undoManager, transactionManager);
+        // Shared by heap .ibd and future .idx trees; Volcano must not call pin.
         this.checkpointEnabled = environment.checkpointEnabled();
         // Strategy is chosen once at construction (timeout XOR wal_size). SQL CHECKPOINT
-        // does not go through this scheduler — CheckpointExecutor calls walManager directly.
+        // does not go through this scheduler — CheckpointExecutor calls the same flush order.
         this.checkpointScheduler = new CheckpointScheduler(
                 environment.createCheckpointStrategy(physicalStorage),
                 lockManager,
                 walManager,
-                transactionManager
+                transactionManager,
+                bufferPool
         );
+        this.fileTableStore = heap;
+        this.indexPageWal = indexPageWal;
     }
 
     @Override
@@ -107,9 +137,15 @@ public final class DefaultStorageEngine implements StorageEngine {
         return tableStore;
     }
 
+    @Override
+    public IndexStore indexStore() {
+        requireStarted();
+        return indexStore;
+    }
+
     /**
-     * Shared page cache for future {@code .ibd}/{@code .idx} I/O.
-     * Available after {@link #start()}; DML does not pin through it yet.
+     * Shared page cache for {@code .ibd} heap and {@code .idx} index I/O.
+     * Available after {@link #start()}; Volcano uses {@link #tableStore()} only.
      */
     @Override
     public BufferPool bufferPool() {
@@ -127,7 +163,20 @@ public final class DefaultStorageEngine implements StorageEngine {
         // Replay also reads wal.checkpoint so maxTxnId survives a prior truncate.
         catalogManager.load();
         int maxTxnId = walManager.replay(catalogManager);
+        // Redo committed logical DML without logging again or double-maintaining indexes.
+        fileTableStore.setSuppressSideEffects(true);
+        try {
+            walManager.redoDml(fileTableStore, indexStore);
+        } finally {
+            fileTableStore.setSuppressSideEffects(false);
+        }
+        indexPageWal.replay();
         transactionManager.seedNextTxnId(maxTxnId + 1);
+        if (indexStore instanceof FileIndexStore fileIndexStore) {
+            for (TableMetadata table : catalogManager.allTables()) {
+                fileIndexStore.loadKeyTypesFromCatalog(table);
+            }
+        }
         if (checkpointEnabled) {
             // After recovery is complete — never checkpoint while still replaying.
             checkpointScheduler.start();
@@ -143,7 +192,7 @@ public final class DefaultStorageEngine implements StorageEngine {
         }
         // Always stop: even if never started (checkpointEnabled=false), stop() is idempotent.
         checkpointScheduler.stop();
-        // Clean shutdown: persist any dirty pages so a restart does not rely on redo (none yet).
+        // Persist dirty pages; WAL-before-data runs per .ibd frame. Restart can also redo.
         bufferPool.flushAll();
         System.out.println("[StorageEngine] stopped");
     }

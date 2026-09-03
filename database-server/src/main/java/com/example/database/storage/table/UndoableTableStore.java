@@ -1,6 +1,7 @@
 package com.example.database.storage.table;
 
 import com.example.database.processor.executor.engine.volcano.Tuple;
+import com.example.database.storage.page.Rid;
 import com.example.database.storage.transaction.TransactionManager;
 import com.example.database.storage.undo.UndoManager;
 
@@ -99,6 +100,16 @@ public final class UndoableTableStore implements TableStore {
     @Override
     public Optional<Tuple> findByRowId(String database, String table, long rowId) {
         return delegate.findByRowId(database, table, rowId);
+    }
+
+    @Override
+    public Optional<Rid> findRid(String database, String table, long rowId) {
+        return delegate.findRid(database, table, rowId);
+    }
+
+    @Override
+    public Optional<Tuple> findByRid(String database, String table, Rid rid) {
+        return delegate.findByRid(database, table, rid);
     }
 
     @Override

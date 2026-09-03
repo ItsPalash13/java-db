@@ -22,6 +22,9 @@ final class WalJson {
         if (record.txnId() != null) {
             json.append(",\"txnId\":").append(record.txnId());
         }
+        if (record.lsn() != null) {
+            json.append(",\"lsn\":").append(record.lsn());
+        }
         if (record.database() != null) {
             json.append(",\"database\":");
             appendString(json, record.database());
@@ -33,6 +36,15 @@ final class WalJson {
         if (record.name() != null) {
             json.append(",\"name\":");
             appendString(json, record.name());
+        }
+        if (record.rowId() != null) {
+            json.append(",\"rowId\":").append(record.rowId());
+        }
+        if (record.pageId() != null) {
+            json.append(",\"pageId\":").append(record.pageId());
+        }
+        if (record.slotId() != null) {
+            json.append(",\"slotId\":").append(record.slotId());
         }
         if (!record.columns().isEmpty()) {
             json.append(",\"columns\":[");
@@ -61,6 +73,13 @@ final class WalJson {
             }
             json.append(']');
         }
+        if (!record.values().isEmpty() || record.op().isDml()) {
+            // Always emit values for DML so empty-key edge cases round-trip.
+            if (record.op().isDml() || !record.values().isEmpty()) {
+                json.append(",\"values\":");
+                appendValues(json, record.values());
+            }
+        }
         json.append("}\n");
         return json.toString().getBytes(StandardCharsets.UTF_8);
     }
@@ -71,6 +90,33 @@ final class WalJson {
             throw new WalException("empty WAL line");
         }
         return new Reader(trimmed).readRecord();
+    }
+
+    private static void appendValues(StringBuilder json, List<Object> values) {
+        json.append('[');
+        for (int i = 0; i < values.size(); i++) {
+            if (i > 0) {
+                json.append(',');
+            }
+            appendValue(json, values.get(i));
+        }
+        json.append(']');
+    }
+
+    private static void appendValue(StringBuilder json, Object value) {
+        if (value == null) {
+            json.append("null");
+        } else if (value instanceof Boolean b) {
+            json.append(b);
+        } else if (value instanceof Integer i) {
+            json.append(i);
+        } else if (value instanceof Long l) {
+            json.append(l);
+        } else if (value instanceof String s) {
+            appendString(json, s);
+        } else {
+            throw new WalException("unsupported WAL value type: " + value.getClass().getName());
+        }
     }
 
     private static void appendString(StringBuilder json, String value) {
@@ -107,33 +153,90 @@ final class WalJson {
             String name = null;
             List<WalRecord.ColumnPayload> columns = List.of();
             List<Integer> columnIds = List.of();
+            Long rowId = null;
+            List<Object> values = List.of();
+            Integer pageId = null;
+            Integer slotId = null;
+            Long lsn = null;
+            boolean first = true;
             while (true) {
                 skipWs();
                 if (peek() == '}') {
                     i++;
                     break;
                 }
-                if (op != null || txnId != null || database != null || table != null || name != null
-                        || !columns.isEmpty() || !columnIds.isEmpty()) {
+                if (!first) {
                     expect(',');
                 }
+                first = false;
                 String key = readString();
                 expect(':');
                 switch (key) {
                     case "op" -> op = WalOp.valueOf(readString());
                     case "txnId" -> txnId = readInt();
+                    case "lsn" -> lsn = readLong();
                     case "database" -> database = readString();
                     case "table" -> table = readString();
                     case "name" -> name = readString();
                     case "columns" -> columns = readColumns();
                     case "columnIds" -> columnIds = readIntArray();
+                    case "rowId" -> rowId = readLong();
+                    case "values" -> values = readValues();
+                    case "pageId" -> pageId = readInt();
+                    case "slotId" -> slotId = readInt();
                     default -> throw new WalException("unknown WAL field: " + key);
                 }
             }
             if (op == null) {
                 throw new WalException("WAL record missing op");
             }
-            return WalRecord.fromParsed(op, txnId, database, table, name, columns, columnIds);
+            return WalRecord.fromParsed(
+                    op, txnId, database, table, name, columns, columnIds, rowId, values, pageId, slotId, lsn
+            );
+        }
+
+        private List<Object> readValues() {
+            expect('[');
+            List<Object> values = new ArrayList<>();
+            skipWs();
+            if (peek() == ']') {
+                i++;
+                return values;
+            }
+            while (true) {
+                values.add(readValue());
+                skipWs();
+                if (peek() == ']') {
+                    i++;
+                    return values;
+                }
+                expect(',');
+            }
+        }
+
+        private Object readValue() {
+            skipWs();
+            char ch = peek();
+            if (ch == '"') {
+                return readString();
+            }
+            if (json.startsWith("null", i)) {
+                i += 4;
+                return null;
+            }
+            if (json.startsWith("true", i)) {
+                i += 4;
+                return Boolean.TRUE;
+            }
+            if (json.startsWith("false", i)) {
+                i += 5;
+                return Boolean.FALSE;
+            }
+            long number = readLong();
+            if (number >= Integer.MIN_VALUE && number <= Integer.MAX_VALUE) {
+                return (int) number;
+            }
+            return number;
         }
 
         private List<WalRecord.ColumnPayload> readColumns() {
@@ -160,15 +263,17 @@ final class WalJson {
             String name = null;
             ColumnType type = null;
             Boolean nullable = null;
+            boolean first = true;
             while (true) {
                 skipWs();
                 if (peek() == '}') {
                     i++;
                     break;
                 }
-                if (name != null || type != null || nullable != null) {
+                if (!first) {
                     expect(',');
                 }
+                first = false;
                 String key = readString();
                 expect(':');
                 switch (key) {
@@ -231,6 +336,14 @@ final class WalJson {
         }
 
         private int readInt() {
+            long value = readLong();
+            if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
+                throw new WalException("int out of range: " + value);
+            }
+            return (int) value;
+        }
+
+        private long readLong() {
             skipWs();
             int start = i;
             if (peek() == '-') {
@@ -242,7 +355,7 @@ final class WalJson {
             if (start == i || (json.charAt(start) == '-' && start + 1 == i)) {
                 throw new WalException("expected number");
             }
-            return Integer.parseInt(json.substring(start, i));
+            return Long.parseLong(json.substring(start, i));
         }
 
         private boolean readBoolean() {

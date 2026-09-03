@@ -2,6 +2,7 @@ package com.example.database.processor.executor;
 
 import com.example.database.processor.planner.CheckpointPlan;
 import com.example.database.processor.planner.ExecutionPlan;
+import com.example.database.storage.bufferpool.BufferPool;
 import com.example.database.storage.lock.LockManager;
 import com.example.database.storage.transaction.TransactionManager;
 import com.example.database.storage.wal.WALManager;
@@ -11,24 +12,28 @@ import java.util.Objects;
 /**
  * Manual {@code CHECKPOINT} SQL path — administrator force, not a {@code CheckpointStrategy}.
  * <p>
- * Runs the same durable-only {@link WALManager#checkpoint()} as the background scheduler.
+ * Under ENGINE X: flush WAL → {@link BufferPool#flushAll()} (WAL-before-data per dirty
+ * frame) → exclusive catalog + {@link WALManager#checkpoint()} fence.
  * Refuses inside an explicit transaction or while any other connection has an open
- * {@code BEGIN} (deferred catalog / uncommitted WAL must not be truncated).
+ * {@code BEGIN}.
  */
 public final class CheckpointExecutor implements QueryExecutor {
 
     private final LockManager lockManager;
     private final WALManager walManager;
     private final TransactionManager transactionManager;
+    private final BufferPool bufferPool;
 
     public CheckpointExecutor(
             LockManager lockManager,
             WALManager walManager,
-            TransactionManager transactionManager
+            TransactionManager transactionManager,
+            BufferPool bufferPool
     ) {
         this.lockManager = Objects.requireNonNull(lockManager, "lockManager");
         this.walManager = Objects.requireNonNull(walManager, "walManager");
         this.transactionManager = Objects.requireNonNull(transactionManager, "transactionManager");
+        this.bufferPool = Objects.requireNonNull(bufferPool, "bufferPool");
     }
 
     @Override
@@ -46,7 +51,12 @@ public final class CheckpointExecutor implements QueryExecutor {
             );
         }
         try {
-            lockManager.runExclusiveCatalog(walManager::checkpoint);
+            lockManager.runWithEngineX(() -> lockManager.runExclusiveCatalog(() -> {
+                // 1) Durable log  2) dirty pages (each flushUpTo)  3) recovery fence
+                walManager.flush();
+                bufferPool.flushAll();
+                walManager.checkpoint();
+            }));
             return QueryResult.ok();
         } catch (RuntimeException e) {
             throw new ExecutionException(e.getMessage(), e);

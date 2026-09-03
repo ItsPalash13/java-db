@@ -5,8 +5,11 @@ import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.IndexMetadata;
 import com.example.database.storage.catalog.TableMetadata;
+import com.example.database.storage.index.IndexStore;
+import com.example.database.storage.page.Rid;
 import com.example.database.storage.physical.PhysicalStorage;
 import com.example.database.storage.physical.PhysicalStorageException;
+import com.example.database.storage.table.TableStore;
 
 import java.nio.charset.StandardCharsets;
 import java.time.ZonedDateTime;
@@ -15,19 +18,21 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Append-only {@code wal.log} under the store root. Pending records are per-thread until
  * {@link #flush()} so rollback can discard work that never became durable.
  * <p>
- * Recovery pair: {@link #replay} redoes committed intent missing from catalog after the
- * last {@code CHECKPOINT} fence; {@link #checkpoint} updates {@code wal.checkpoint} and
- * <strong>appends</strong> a CHECKPOINT line — the log is never rewritten or truncated.
- * Checkpoint is not a buffer-pool flush — we have no dirty pages yet.
+ * LSN is a monotonic counter assigned at {@link #appendReturningLsn}; heap pages stamp
+ * that LSN so {@link #flushUpTo} can force the log before writing {@code .ibd} bytes.
+ * Recovery: {@link #replay} for catalog, {@link #redoDml} for committed logical DML.
+ * Checkpoint updates {@code wal.checkpoint} and appends a CHECKPOINT line — callers
+ * flush dirty pages before invoking {@link #checkpoint()}.
  */
 public final class DefaultWALManager implements WALManager {
 
-    /** Redo stream: JSON lines with DDL + COMMIT + CHECKPOINT. Append-only — never truncated. */
+    /** Redo stream: JSON lines. Append-only — never truncated. */
     public static final String WAL_FILE = "wal.log";
     /**
      * Side-file recovery cursor ({@code maxTxnId}). Complements the CHECKPOINT line in
@@ -38,6 +43,17 @@ public final class DefaultWALManager implements WALManager {
     private final PhysicalStorage physicalStorage;
     // Unflushed records for the current transaction on this thread.
     private final ThreadLocal<List<WalRecord>> pending = ThreadLocal.withInitial(ArrayList::new);
+    // Next LSN to assign; advanced past max on-disk LSN when the log is first scanned.
+    private final AtomicLong nextLsn = new AtomicLong(1);
+    // Highest LSN known durable on disk (after flush / scan).
+    private final AtomicLong durableLsn = new AtomicLong(0);
+    private final Object lsnInitLock = new Object();
+    /**
+     * Serializes appends to {@code wal.log}. Concurrent flush/checkpoint without this
+     * races on read-length-then-write in {@link #appendLine} and corrupts JSON lines.
+     */
+    private final Object walFileLock = new Object();
+    private volatile boolean lsnInitialized;
 
     public DefaultWALManager(PhysicalStorage physicalStorage) {
         this.physicalStorage = Objects.requireNonNull(physicalStorage, "physicalStorage");
@@ -46,29 +62,62 @@ public final class DefaultWALManager implements WALManager {
     @Override
     public void append(WalRecord record) {
         Objects.requireNonNull(record, "record");
+        ensureLsnInitialized();
         pending.get().add(record);
     }
 
     @Override
+    public long appendReturningLsn(WalRecord record) {
+        Objects.requireNonNull(record, "record");
+        ensureLsnInitialized();
+        long lsn = nextLsn.getAndIncrement();
+        pending.get().add(record.withLsn(lsn));
+        return lsn;
+    }
+
+    @Override
     public void flush() {
+        ensureLsnInitialized();
         List<WalRecord> records = pending.get();
         if (records.isEmpty()) {
-            // Still force an existing log so commit is a durable barrier when the file exists.
             if (physicalStorage.exists(WAL_FILE)) {
                 physicalStorage.flush(WAL_FILE);
             }
             return;
         }
-        try {
-            ensureWalFile();
-            for (WalRecord record : records) {
-                appendLine(WalJson.toLine(record));
+        synchronized (walFileLock) {
+            try {
+                ensureWalFile();
+                long maxFlushed = durableLsn.get();
+                for (WalRecord record : records) {
+                    appendLineUnlocked(WalJson.toLine(record));
+                    if (record.lsn() != null) {
+                        maxFlushed = Math.max(maxFlushed, record.lsn());
+                    }
+                }
+                physicalStorage.flush(WAL_FILE);
+                final long flushedHigh = maxFlushed;
+                durableLsn.updateAndGet(current -> Math.max(current, flushedHigh));
+                records.clear();
+            } catch (PhysicalStorageException e) {
+                throw new WalException("failed to flush WAL", e);
             }
-            // write() can return with bytes only in the OS cache; crash would lose intent.
+        }
+    }
+
+    @Override
+    public void flushUpTo(long lsn) {
+        if (lsn <= 0) {
+            return;
+        }
+        ensureLsnInitialized();
+        if (durableLsn.get() >= lsn) {
+            return;
+        }
+        // Teaching simplification: pending is thread-local and shared with COMMIT — flush all.
+        flush();
+        if (durableLsn.get() < lsn && physicalStorage.exists(WAL_FILE)) {
             physicalStorage.flush(WAL_FILE);
-            records.clear();
-        } catch (PhysicalStorageException e) {
-            throw new WalException("failed to flush WAL", e);
         }
     }
 
@@ -80,9 +129,8 @@ public final class DefaultWALManager implements WALManager {
     @Override
     public int replay(CatalogManager catalogManager) {
         Objects.requireNonNull(catalogManager, "catalogManager");
+        ensureLsnInitialized();
         ZonedDateTime startedAt = ZonedDateTime.now();
-        // Start from checkpoint so a truncated wal.log still advances nextTxnId correctly.
-        // Without this, every restart after checkpoint would reuse txnId 1 and collide in the log.
         int maxTxnId = readCheckpointMaxTxnId();
         if (!physicalStorage.exists(WAL_FILE)) {
             WalReplayLogWriter.writeEmpty(
@@ -107,8 +155,6 @@ public final class DefaultWALManager implements WALManager {
         WalReplayReport report = new WalReplayReport();
         String text = new String(bytes, StandardCharsets.UTF_8);
         String[] lines = text.split("\n", -1);
-        // Last CHECKPOINT is the recovery fence: catalog was durable through that point, so
-        // older redo stays on disk (append-only history) but is not applied again.
         int applyFrom = 0;
         for (int i = 0; i < lines.length; i++) {
             if (lines[i].isBlank()) {
@@ -123,7 +169,6 @@ public final class DefaultWALManager implements WALManager {
             }
         }
         int walLines = 0;
-        // Buffer DDL until COMMIT: uncommitted groups must not mutate catalog on recovery.
         Map<Integer, List<WalRecord>> bufferedByTxn = new HashMap<>();
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
@@ -136,11 +181,9 @@ public final class DefaultWALManager implements WALManager {
                 maxTxnId = Math.max(maxTxnId, record.txnId());
             }
             if (i < applyFrom) {
-                // Before last checkpoint — audit only; catalog already has these effects.
                 continue;
             }
             if (record.op() == WalOp.CHECKPOINT) {
-                // Barrier only — prior DDL already durable in catalog; do not buffer or apply.
                 continue;
             }
             if (record.op() == WalOp.COMMIT) {
@@ -151,13 +194,20 @@ public final class DefaultWALManager implements WALManager {
                 List<WalRecord> buffered = bufferedByTxn.remove(txnId);
                 if (buffered != null) {
                     for (WalRecord ddl : buffered) {
-                        applyIdempotent(catalogManager, ddl, report);
+                        if (!ddl.op().isDml()) {
+                            applyIdempotent(catalogManager, ddl, report);
+                        }
                     }
                 }
                 continue;
             }
+            if (record.op().isDml()) {
+                if (record.txnId() != null) {
+                    bufferedByTxn.computeIfAbsent(record.txnId(), ignored -> new ArrayList<>()).add(record);
+                }
+                continue;
+            }
             if (record.txnId() == null) {
-                // Legacy Step 3 lines: no txn boundary — treat as committed redo.
                 applyIdempotent(catalogManager, record, report);
                 continue;
             }
@@ -176,40 +226,121 @@ public final class DefaultWALManager implements WALManager {
         return maxTxnId;
     }
 
-    /**
-     * Durable-only checkpoint: catalog files are assumed already consistent with every
-     * committed op up through the current high-water mark. Callers must hold the exclusive
-     * catalog lock so we never race the WAL COMMIT flush → {@code persistChangesSince} gap.
-     * <p>
-     * {@code wal.log} is append-only forever: once a byte is written it is never rewritten
-     * or truncated. Checkpoint only:
-     * <ol>
-     *   <li>Updates {@code wal.checkpoint} (side-file cursor + maxTxnId)</li>
-     *   <li>Appends a {@link WalOp#CHECKPOINT} line to {@code wal.log}</li>
-     * </ol>
-     * Replay uses the last CHECKPOINT as the recovery start fence (older lines stay on disk
-     * for audit; they are not re-applied).
-     */
+    @Override
+    public void redoDml(TableStore tableStore, IndexStore indexStore) {
+        Objects.requireNonNull(tableStore, "tableStore");
+        Objects.requireNonNull(indexStore, "indexStore");
+        ensureLsnInitialized();
+        if (!physicalStorage.exists(WAL_FILE)) {
+            return;
+        }
+        byte[] bytes;
+        try {
+            bytes = physicalStorage.read(WAL_FILE);
+        } catch (PhysicalStorageException e) {
+            throw new WalException("failed to read WAL for DML redo", e);
+        }
+        if (bytes.length == 0) {
+            return;
+        }
+        String[] lines = new String(bytes, StandardCharsets.UTF_8).split("\n", -1);
+        int applyFrom = 0;
+        for (int i = 0; i < lines.length; i++) {
+            if (lines[i].isBlank()) {
+                continue;
+            }
+            WalRecord probe = WalJson.fromLine(lines[i]);
+            if (probe.op() == WalOp.CHECKPOINT) {
+                applyFrom = i + 1;
+            }
+        }
+        Map<Integer, List<WalRecord>> bufferedByTxn = new HashMap<>();
+        for (int i = applyFrom; i < lines.length; i++) {
+            if (lines[i].isBlank()) {
+                continue;
+            }
+            WalRecord record = WalJson.fromLine(lines[i]);
+            if (record.op() == WalOp.CHECKPOINT) {
+                continue;
+            }
+            if (record.op() == WalOp.COMMIT) {
+                Integer txnId = record.txnId();
+                if (txnId == null) {
+                    throw new WalException("COMMIT record missing txnId");
+                }
+                List<WalRecord> buffered = bufferedByTxn.remove(txnId);
+                if (buffered != null) {
+                    for (WalRecord dml : buffered) {
+                        if (dml.op().isDml()) {
+                            applyDmlIdempotent(tableStore, indexStore, dml);
+                        }
+                    }
+                }
+                continue;
+            }
+            if (!record.op().isDml()) {
+                continue;
+            }
+            if (record.txnId() == null) {
+                applyDmlIdempotent(tableStore, indexStore, record);
+            } else {
+                bufferedByTxn.computeIfAbsent(record.txnId(), ignored -> new ArrayList<>()).add(record);
+            }
+        }
+    }
+
     @Override
     public int checkpoint() {
-        // Merge prior barrier with current log so repeated checkpoints never regress maxTxnId.
-        int maxTxnId = Math.max(readCheckpointMaxTxnId(), scanWalMaxTxnId());
-        try {
-            byte[] metaBytes = WalCheckpointJson.toBytes(new WalCheckpointMeta(maxTxnId));
-            if (!physicalStorage.exists(CHECKPOINT_FILE)) {
-                // PhysicalStorage.write requires create-first; we never invent files in write().
-                physicalStorage.create(CHECKPOINT_FILE);
+        ensureLsnInitialized();
+        synchronized (walFileLock) {
+            int maxTxnId = Math.max(readCheckpointMaxTxnId(), scanWalMaxTxnId());
+            try {
+                byte[] metaBytes = WalCheckpointJson.toBytes(new WalCheckpointMeta(maxTxnId));
+                if (!physicalStorage.exists(CHECKPOINT_FILE)) {
+                    physicalStorage.create(CHECKPOINT_FILE);
+                }
+                physicalStorage.write(CHECKPOINT_FILE, metaBytes);
+                physicalStorage.flush(CHECKPOINT_FILE);
+                ensureWalFile();
+                appendLineUnlocked(WalJson.toLine(WalRecord.checkpoint(maxTxnId)));
+                physicalStorage.flush(WAL_FILE);
+                return maxTxnId;
+            } catch (PhysicalStorageException e) {
+                throw new WalException("failed to checkpoint WAL", e);
             }
-            physicalStorage.write(CHECKPOINT_FILE, metaBytes);
-            // force(true) equivalent: write() alone can sit in the OS cache; barrier must survive crash.
-            physicalStorage.flush(CHECKPOINT_FILE);
-            // Append-only: never replace or empty wal.log — only add a barrier line at EOF.
-            ensureWalFile();
-            appendLine(WalJson.toLine(WalRecord.checkpoint(maxTxnId)));
-            physicalStorage.flush(WAL_FILE);
-            return maxTxnId;
-        } catch (PhysicalStorageException e) {
-            throw new WalException("failed to checkpoint WAL", e);
+        }
+    }
+
+    private void ensureLsnInitialized() {
+        if (lsnInitialized) {
+            return;
+        }
+        synchronized (lsnInitLock) {
+            if (lsnInitialized) {
+                return;
+            }
+            long maxLsn = 0;
+            if (physicalStorage.exists(WAL_FILE)) {
+                try {
+                    byte[] bytes = physicalStorage.read(WAL_FILE);
+                    if (bytes.length > 0) {
+                        for (String line : new String(bytes, StandardCharsets.UTF_8).split("\n", -1)) {
+                            if (line.isBlank()) {
+                                continue;
+                            }
+                            WalRecord record = WalJson.fromLine(line);
+                            if (record.lsn() != null) {
+                                maxLsn = Math.max(maxLsn, record.lsn());
+                            }
+                        }
+                    }
+                } catch (PhysicalStorageException e) {
+                    throw new WalException("failed to scan WAL for LSN", e);
+                }
+            }
+            durableLsn.set(maxLsn);
+            nextLsn.set(maxLsn + 1);
+            lsnInitialized = true;
         }
     }
 
@@ -219,8 +350,6 @@ public final class DefaultWALManager implements WALManager {
         }
         try {
             byte[] bytes = physicalStorage.read(CHECKPOINT_FILE);
-            // Empty or whitespace-only: treat like missing. create() can leave a 0-byte file,
-            // or a crash mid-write can leave junk that trims to nothing — must not block start().
             if (bytes.length == 0 || new String(bytes, StandardCharsets.UTF_8).trim().isEmpty()) {
                 return 0;
             }
@@ -230,10 +359,6 @@ public final class DefaultWALManager implements WALManager {
         }
     }
 
-    /**
-     * Highest txnId still present in the redo file. Used only to populate the barrier;
-     * we do not apply records here — that is {@link #replay}'s job on startup.
-     */
     private int scanWalMaxTxnId() {
         if (!physicalStorage.exists(WAL_FILE)) {
             return 0;
@@ -244,8 +369,7 @@ public final class DefaultWALManager implements WALManager {
                 return 0;
             }
             int maxTxnId = 0;
-            String text = new String(bytes, StandardCharsets.UTF_8);
-            for (String line : text.split("\n", -1)) {
+            for (String line : new String(bytes, StandardCharsets.UTF_8).split("\n", -1)) {
                 if (line.isBlank()) {
                     continue;
                 }
@@ -267,11 +391,87 @@ public final class DefaultWALManager implements WALManager {
     }
 
     private void appendLine(byte[] line) {
-        // Offset == current length is append; PhysicalStorage rejects writing past EOF with a hole.
+        synchronized (walFileLock) {
+            appendLineUnlocked(line);
+        }
+    }
+
+    /** Caller must hold {@link #walFileLock}. */
+    private void appendLineUnlocked(byte[] line) {
         byte[] existing = physicalStorage.exists(WAL_FILE)
                 ? physicalStorage.read(WAL_FILE)
                 : new byte[0];
         physicalStorage.write(WAL_FILE, existing.length, line);
+    }
+
+    private static void applyDmlIdempotent(TableStore tableStore, IndexStore indexStore, WalRecord record) {
+        switch (record.op()) {
+            case INSERT_ROW -> {
+                long rowId = record.rowId();
+                if (tableStore.findByRowId(record.database(), record.table(), rowId).isEmpty()) {
+                    // Same as undo of DELETE: fixed rowId without allocating a new id.
+                    tableStore.restoreRow(
+                            record.database(),
+                            record.table(),
+                            new com.example.database.processor.executor.engine.volcano.Tuple(
+                                    rowId, record.valuesArray()
+                            )
+                    );
+                }
+            }
+            case UPDATE_ROW -> {
+                if (tableStore.findByRowId(record.database(), record.table(), record.rowId()).isPresent()) {
+                    tableStore.update(
+                            record.database(),
+                            record.table(),
+                            record.rowId(),
+                            record.valuesArray()
+                    );
+                } else {
+                    tableStore.restoreRow(
+                            record.database(),
+                            record.table(),
+                            new com.example.database.processor.executor.engine.volcano.Tuple(
+                                    record.rowId(), record.valuesArray()
+                            )
+                    );
+                }
+            }
+            case DELETE_ROW -> tableStore.delete(record.database(), record.table(), record.rowId());
+            case INDEX_INSERT -> {
+                Rid rid = record.rid();
+                if (rid != null) {
+                    try {
+                        indexStore.insert(
+                                record.database(),
+                                record.table(),
+                                record.name(),
+                                record.valuesArray(),
+                                rid
+                        );
+                    } catch (RuntimeException ignored) {
+                        // Idempotent after IndexPageWal or prior redo.
+                    }
+                }
+            }
+            case INDEX_DELETE -> {
+                Rid rid = record.rid();
+                if (rid != null) {
+                    try {
+                        indexStore.delete(
+                                record.database(),
+                                record.table(),
+                                record.name(),
+                                record.valuesArray(),
+                                rid
+                        );
+                    } catch (RuntimeException ignored) {
+                        // Idempotent: key may already be absent.
+                    }
+                }
+            }
+            default -> throw new WalException("not a DML op: " + record.op());
+        }
     }
 
     private static void applyIdempotent(CatalogManager catalog, WalRecord record, WalReplayReport report) {
@@ -379,11 +579,11 @@ public final class DefaultWALManager implements WALManager {
                         report.addSkipped(record, e.getMessage());
                     }
                 }
-                case COMMIT -> {
-                    // Handled in replay scan — not applied to catalog.
+                case INSERT_ROW, UPDATE_ROW, DELETE_ROW, INDEX_INSERT, INDEX_DELETE -> {
+                    // Catalog path never applies DML.
                 }
-                case CHECKPOINT -> {
-                    // Barrier marker only — handled in replay scan; never mutates catalog.
+                case COMMIT, CHECKPOINT -> {
+                    // Handled in replay scan.
                 }
             }
         } catch (CatalogException e) {

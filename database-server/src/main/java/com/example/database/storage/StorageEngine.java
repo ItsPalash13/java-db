@@ -2,6 +2,7 @@ package com.example.database.storage;
 
 import com.example.database.storage.bufferpool.BufferPool;
 import com.example.database.storage.catalog.CatalogManager;
+import com.example.database.storage.index.IndexStore;
 import com.example.database.storage.lock.LockManager;
 import com.example.database.storage.table.TableStore;
 import com.example.database.storage.transaction.TransactionManager;
@@ -20,9 +21,9 @@ import com.example.database.storage.wal.WALManager;
  *   LockManager         catalog exclusive locks for DDL (wired)
  *   WALManager          durable catalog DDL logging + replay + checkpoint (wired)
  *   CheckpointScheduler background timeout/size triggers (wired when enabled)
- *   TableStore          row heaps (InMemoryTableStore today; file store later)
- *   IndexStore          index structures (later)
- *   BufferPool          cached persistent pages for .ibd/.idx (wired; unused by DML yet)
+ *   TableStore          row heaps ({@link com.example.database.storage.table.FileTableStore})
+ *   IndexStore          on-disk B+ tree indexes ({@code .idx})
+ *   BufferPool          cached persistent pages for .ibd/.idx (wired)
  * </pre>
  */
 public interface StorageEngine {
@@ -65,16 +66,22 @@ public interface StorageEngine {
     WALManager walManager();
 
     /**
-     * Row store for DML/DQL. Temporary in-memory heaps until FileTableStore (Phase 4).
+     * Row store for DML/DQL. Page-backed {@code .ibd} heaps through {@link #bufferPool()}.
      *
      * @throws IllegalStateException if storage is not started
      */
     TableStore tableStore();
 
     /**
+     * Secondary B+ tree indexes for equality probes and DML maintenance.
+     *
+     * @throws IllegalStateException if storage is not started
+     */
+    IndexStore indexStore();
+
+    /**
      * Page cache for heap {@code .ibd} / index {@code .idx} files.
-     * Constructed with the engine and flushed on {@link #stop()}; DML still uses
-     * {@link #tableStore()} (in-memory) until FileTableStore pins through this pool.
+     * Constructed with the engine and flushed on {@link #stop()}; {@link #tableStore()} pins through it.
      * Volcano operators must never call {@code pin} directly.
      *
      * @throws IllegalStateException if storage is not started

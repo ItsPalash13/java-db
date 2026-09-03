@@ -19,6 +19,7 @@ public final class SelectPlan implements ExecutionPlan {
     private final Expression where;
     private final List<ColumnMetadata> columns;
     private final AccessPath accessPath;
+    private final IndexScanSpec indexScanSpec;
 
     public SelectPlan(
             String database,
@@ -26,7 +27,8 @@ public final class SelectPlan implements ExecutionPlan {
             List<ResolvedProjection> projections,
             Expression where,
             List<ColumnMetadata> columns,
-            AccessPath accessPath
+            AccessPath accessPath,
+            IndexScanSpec indexScanSpec
     ) {
         this.database = Objects.requireNonNull(database, "database");
         this.table = Objects.requireNonNull(table, "table");
@@ -34,9 +36,21 @@ public final class SelectPlan implements ExecutionPlan {
         this.where = where;
         this.columns = List.copyOf(Objects.requireNonNull(columns, "columns"));
         this.accessPath = Objects.requireNonNull(accessPath, "accessPath");
+        this.indexScanSpec = indexScanSpec;
         if (projections.isEmpty()) {
             throw new IllegalArgumentException("projections must not be empty");
         }
+    }
+
+    public SelectPlan(
+            String database,
+            String table,
+            List<ResolvedProjection> projections,
+            Expression where,
+            List<ColumnMetadata> columns,
+            AccessPathChoice choice
+    ) {
+        this(database, table, projections, where, columns, choice.accessPath(), choice.indexScanSpec());
     }
 
     @Override
@@ -66,6 +80,10 @@ public final class SelectPlan implements ExecutionPlan {
 
     public AccessPath accessPath() {
         return accessPath;
+    }
+
+    public IndexScanSpec indexScanSpec() {
+        return indexScanSpec;
     }
 
     @Override

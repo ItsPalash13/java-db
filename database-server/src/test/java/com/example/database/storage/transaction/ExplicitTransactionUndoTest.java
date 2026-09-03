@@ -59,7 +59,16 @@ class ExplicitTransactionUndoTest {
         }
 
         @Override
+        public long appendReturningLsn(com.example.database.storage.wal.WalRecord record) {
+            return 1L;
+        }
+
+        @Override
         public void flush() {
+        }
+
+        @Override
+        public void flushUpTo(long lsn) {
         }
 
         @Override
@@ -69,6 +78,13 @@ class ExplicitTransactionUndoTest {
         @Override
         public int replay(com.example.database.storage.catalog.CatalogManager catalogManager) {
             return 0;
+        }
+
+        @Override
+        public void redoDml(
+                com.example.database.storage.table.TableStore tableStore,
+                com.example.database.storage.index.IndexStore indexStore
+        ) {
         }
 
         @Override

@@ -1,5 +1,7 @@
 package com.example.database.storage.undo;
 
+import com.example.database.storage.index.IndexStore;
+import com.example.database.storage.page.Rid;
 import com.example.database.storage.table.TableStore;
 
 /**
@@ -13,6 +15,10 @@ public interface UndoManager {
     void recordUpdate(int txnId, String database, String table, long rowId, Object[] beforeValues);
 
     void recordDelete(int txnId, String database, String table, long rowId, Object[] beforeValues);
+
+    void recordIndexInsert(int txnId, String database, String table, String indexName, Object[] key, Rid rid);
+
+    void recordIndexDelete(int txnId, String database, String table, String indexName, Object[] key, Rid rid);
 
     /** Applies undo records for {@code txnId} then drops them. */
     void rollback(int txnId, TableStore tableStore);

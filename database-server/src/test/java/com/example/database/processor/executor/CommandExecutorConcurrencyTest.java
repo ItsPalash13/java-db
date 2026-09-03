@@ -46,7 +46,8 @@ class CommandExecutorConcurrencyTest {
                 new DefaultTransactionManager(wal, new DefaultUndoManager()),
                 locks,
                 wal,
-                new com.example.database.storage.table.InMemoryTableStore()
+                new com.example.database.storage.table.InMemoryTableStore(),
+                new com.example.database.storage.index.NoopIndexStore()
         );
 
         CreateTablePlan plan = new CreateTablePlan(

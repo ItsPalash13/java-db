@@ -75,6 +75,35 @@ public final class RowCodec {
     }
 
     /**
+     * Decode a row written with an older, narrower schema by trying shorter column
+     * prefixes and null-padding any trailing columns missing from the payload.
+     * Used after {@code ALTER TABLE ADD COLUMN} when heap rows were not rewritten.
+     */
+    public static Tuple decodeWithNullPad(byte[] payload, ColumnType[] types) {
+        Objects.requireNonNull(payload, "payload");
+        Objects.requireNonNull(types, "types");
+        PageLayoutException last = null;
+        for (int cols = types.length; cols >= 1; cols--) {
+            ColumnType[] prefix = java.util.Arrays.copyOf(types, cols);
+            try {
+                Tuple decoded = decode(payload, prefix);
+                if (cols == types.length) {
+                    return decoded;
+                }
+                Object[] padded = new Object[types.length];
+                System.arraycopy(decoded.values(), 0, padded, 0, cols);
+                return new Tuple(decoded.rowId(), padded);
+            } catch (PageLayoutException e) {
+                last = e;
+            }
+        }
+        if (last != null) {
+            throw last;
+        }
+        throw new PageLayoutException("cannot decode row payload");
+    }
+
+    /**
      * Unpack a payload produced by {@link #encode} into a {@link Tuple}.
      *
      * @throws PageLayoutException if truncated, trailing junk, or bad BOOLEAN byte

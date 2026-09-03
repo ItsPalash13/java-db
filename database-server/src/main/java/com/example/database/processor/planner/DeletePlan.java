@@ -16,19 +16,32 @@ public final class DeletePlan implements ExecutionPlan {
     private final Expression where;
     private final List<ColumnMetadata> columns;
     private final AccessPath accessPath;
+    private final IndexScanSpec indexScanSpec;
 
     public DeletePlan(
             String database,
             String table,
             Expression where,
             List<ColumnMetadata> columns,
-            AccessPath accessPath
+            AccessPath accessPath,
+            IndexScanSpec indexScanSpec
     ) {
         this.database = Objects.requireNonNull(database, "database");
         this.table = Objects.requireNonNull(table, "table");
         this.where = where;
         this.columns = List.copyOf(Objects.requireNonNull(columns, "columns"));
         this.accessPath = Objects.requireNonNull(accessPath, "accessPath");
+        this.indexScanSpec = indexScanSpec;
+    }
+
+    public DeletePlan(
+            String database,
+            String table,
+            Expression where,
+            List<ColumnMetadata> columns,
+            AccessPathChoice choice
+    ) {
+        this(database, table, where, columns, choice.accessPath(), choice.indexScanSpec());
     }
 
     @Override
@@ -54,6 +67,10 @@ public final class DeletePlan implements ExecutionPlan {
 
     public AccessPath accessPath() {
         return accessPath;
+    }
+
+    public IndexScanSpec indexScanSpec() {
+        return indexScanSpec;
     }
 
     @Override

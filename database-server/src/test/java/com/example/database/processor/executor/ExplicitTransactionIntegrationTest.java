@@ -132,7 +132,8 @@ class ExplicitTransactionIntegrationTest {
                 tx,
                 lock,
                 wal,
-                tableStore
+                tableStore,
+                new com.example.database.storage.index.NoopIndexStore()
         );
         TransactionControlExecutor control = new TransactionControlExecutor(tx, lock, catalog, tableStore);
         return new ExplicitTxnFixture(catalog, ddl, control);

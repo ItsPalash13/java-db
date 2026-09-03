@@ -8,6 +8,8 @@ import com.example.database.processor.executor.CheckpointExecutor;
 import com.example.database.processor.executor.CommandExecutor;
 import com.example.database.processor.executor.DescribeExecutor;
 import com.example.database.processor.executor.ExecutionException;
+import com.example.database.storage.index.IndexStoreException;
+import com.example.database.storage.page.PageLayoutException;
 import com.example.database.processor.executor.ExecutorRegistry;
 import com.example.database.processor.executor.QueryDispatcher;
 import com.example.database.processor.executor.QueryResult;
@@ -123,6 +125,21 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             String error = "ERROR: " + e.getMessage();
             System.out.println("[QueryProcessor] lock error: " + error);
             return QueryResult.error(error);
+        } catch (IndexStoreException e) {
+            // Unique index violation (e.g. duplicate PRIMARY KEY).
+            String error = "ERROR: " + e.getMessage();
+            System.out.println("[QueryProcessor] index error: " + error);
+            return QueryResult.error(error);
+        } catch (IllegalArgumentException e) {
+            // NOT NULL violation on PRIMARY KEY columns.
+            String error = "ERROR: " + e.getMessage();
+            System.out.println("[QueryProcessor] constraint error: " + error);
+            return QueryResult.error(error);
+        } catch (PageLayoutException e) {
+            // Concurrent schema / codec mismatch (e.g. value count vs columns).
+            String error = "ERROR: " + e.getMessage();
+            System.out.println("[QueryProcessor] page layout error: " + error);
+            return QueryResult.error(error);
         }
     }
 
@@ -133,11 +150,25 @@ public final class DefaultQueryProcessor implements QueryProcessor {
     private void rollbackExplicitIfActive() {
         TransactionManager transactions = storageEngine.transactionManager();
         if (transactions.inExplicitTransaction()) {
-            transactions.rollbackExplicit(
-                    storageEngine.lockManager(),
-                    storageEngine.catalogManager(),
-                    storageEngine.tableStore()
-            );
+            try {
+                transactions.rollbackExplicit(
+                        storageEngine.lockManager(),
+                        storageEngine.catalogManager(),
+                        storageEngine.tableStore()
+                );
+            } catch (RuntimeException rollbackError) {
+                // Concurrent DROP INDEX can make undo index ops fail — still clear the session best-effort.
+                System.out.println("[QueryProcessor] rollback after lock error: " + rollbackError.getMessage());
+                try {
+                    storageEngine.transactionManager().endConnectionSession(
+                            storageEngine.lockManager(),
+                            storageEngine.catalogManager(),
+                            storageEngine.tableStore()
+                    );
+                } catch (RuntimeException ignored) {
+                    // last resort
+                }
+            }
         }
     }
 
@@ -158,7 +189,8 @@ public final class DefaultQueryProcessor implements QueryProcessor {
                     storageEngine.transactionManager(),
                     storageEngine.lockManager(),
                     storageEngine.walManager(),
-                    storageEngine.tableStore()
+                    storageEngine.tableStore(),
+                    storageEngine.indexStore()
             );
             TransactionControlExecutor transactionControl = new TransactionControlExecutor(
                     storageEngine.transactionManager(),
@@ -169,11 +201,13 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             CheckpointExecutor checkpoint = new CheckpointExecutor(
                     storageEngine.lockManager(),
                     storageEngine.walManager(),
-                    storageEngine.transactionManager()
+                    storageEngine.transactionManager(),
+                    storageEngine.bufferPool()
             );
             DescribeExecutor describe = new DescribeExecutor(storageEngine.catalogManager());
             VolcanoExecutor volcano = new VolcanoExecutor(
                     storageEngine.tableStore(),
+                    storageEngine.indexStore(),
                     storageEngine.lockManager(),
                     storageEngine.transactionManager(),
                     storageEngine.catalogManager()

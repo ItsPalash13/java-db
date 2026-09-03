@@ -48,7 +48,9 @@ TransactionManager **calls** lock + WAL; it does not replace them.
 
 ---
 
-## Build order (four steps)
+## Build order (five steps)
+
+Steps 1–4 are runtime. **Step 5** is a PlantUML visibility pass on `docs/lld/java-database-lld.puml` (colors + line strokes per subsystem) — do it after Step 4 so the diagram matches the finished wiring.
 
 ### Step 1 — TransactionManager shell (implicit single-statement)
 
@@ -238,10 +240,66 @@ Step 4 — Explicit BEGIN/COMMIT/ROLLBACK
 Parallel
 [ ] Eager QueryDispatcher
 [ ] Graceful TcpNetworkModule shutdown
+
+Step 5 — LLD PlantUML color pass
+[ ] Stereotypes + skinparams for txn / lock / wal / explicit / catalog
+[ ] Recolor association lines that belong to each subsystem (legend in `.puml` header)
+[ ] Preview `.puml`; keep `.md` / `.txt` LLD in sync if stereotypes are documented there
 ```
+
+---
+
+## Step 5 — Color the PlantUML LLD by Phase 2 subsystem
+
+**Goal:** Make `docs/lld/java-database-lld.puml` readable at a glance: each Phase 2 piece (and the catalog it mutates) uses a **distinct fill** on types and a **matching stroke** on the arrows that belong to that piece. Default interface/concrete skinparams stay for everything else (query/network/buffer).
+
+**Why:** The diagram is dense; gray arrows and uniform amber/blue boxes hide the Step 1→4 wiring (`CommandExecutor` → txn / lock / WAL, `StorageEngine` owns, recovery edges). Color is documentation, not a code change.
+
+**Legend (use these hexes; do not reuse across layers):**
+
+| Subsystem | Phase step | Stereotype (suggested) | Type fill / border | Line color | What gets that color |
+|-----------|------------|------------------------|--------------------|------------|----------------------|
+| **Transaction** | Step 1 + orchestrator | `<<txn>>` | fill `#ccfbf1` / border `#0d9488` (teal) | `#0d9488` | `TransactionManager`, `DefaultTransactionManager`, `TransactionContext`, `TransactionControlExecutor`; edges: `StorageEngine`/`DefaultStorageEngine` → txn, `CommandExecutor` → txn, `VolcanoExecutor` → txn, `TransactionControlExecutor` → txn, `CheckpointExecutor` → txn |
+| **Lock** | Step 2 | `<<lock>>` | fill `#ffedd5` / border `#ea580c` (orange) | `#ea580c` | `LockManager`, `DefaultLockManager`, `LockException`, `CatalogLockException`, `TransactionAbortedException`; edges: engine owns lock, `CommandExecutor` / `VolcanoExecutor` / `CheckpointExecutor` / `CheckpointScheduler` → lock |
+| **WAL** | Step 3 | `<<wal>>` | fill `#fce7f3` / border `#db2777` (pink) | `#db2777` | `WALManager`, `DefaultWALManager`, `WalRecord`, `WalOp`, checkpoint strategy types tied to WAL flush; edges: engine owns WAL, `CommandExecutor` → WAL, `DefaultTransactionManager` → WAL, `DefaultWALManager` → `PhysicalStorage` / replay → `CatalogManager`, `CheckpointExecutor` / `CheckpointScheduler` → WAL |
+| **Explicit txn control** | Step 4 | `<<explicit-txn>>` | fill `#e0e7ff` / border `#4f46e5` (indigo) | `#4f46e5` | Plans/AST/tokens only used for `BEGIN`/`COMMIT`/`ROLLBACK` if shown separately; prefer thickening or tagging the **control** edges (`TransactionControlExecutor` → `TransactionManager` begin/commit/rollback) so multi-statement path stands out from implicit `runInTransaction` (teal) |
+| **Catalog (touched by Phase 2)** | Phase 1 surface | `<<catalog>>` | fill `#ecfdf5` / border `#059669` (green) | `#059669` | `CatalogManager`, `DefaultCatalogManager`, `CatalogStore`, `JsonCatalogStore`, catalog metadata types on the DDL write path; edges: `CommandExecutor` → catalog writes, analyser **reads** can stay default gray or a lighter green dashed |
+
+**How to edit `.puml`:**
+
+1. Keep existing global `skinparam interface` / `<<concrete>>` / enum / exception as the **baseline**.
+2. Add stereotypes on Phase 2 types, e.g. `interface TransactionManager <<txn>>`, `class DefaultLockManager <<concrete>> <<lock>>`, then:
+
+```plantuml
+skinparam class<<txn>> {
+  BackgroundColor #ccfbf1
+  BorderColor #0d9488
+}
+skinparam interface<<txn>> {
+  BackgroundColor #ccfbf1
+  BorderColor #0d9488
+}
+' same pattern for <<lock>>, <<wal>>, <<catalog>>, <<explicit-txn>>
+```
+
+3. Recolor **only** the association lines that carry that subsystem’s protocol. PlantUML: put the color after the arrow:
+
+```plantuml
+CommandExecutor --> TransactionManager #0d9488 : implicit txn / explicit append
+CommandExecutor --> LockManager #ea580c : table X / database X / catalog X
+CommandExecutor --> WALManager #db2777 : append (flush at commit)
+DefaultTransactionManager --> WALManager #db2777 : flush COMMIT / discard
+```
+
+4. Put a short **color legend comment** at the top of `java-database-lld.puml` (under the file header) so the legend survives regenerations and matches this table.
+5. Same change set: if stereotypes appear in the diagram, note them in `java-database-lld.md` / `.txt` only if those docs list stereotypes; do not invent new types.
+
+**Not in this step:** rearranging packages, deleting edges, or changing Java. Parallel checklist items (eager dispatcher, graceful shutdown) stay separate.
+
+**Done when:** opening the `.puml` preview, you can trace teal = txn orchestration, orange = locks, pink = WAL durability, green = catalog mutate/replay target, without reading every label.
 
 ---
 
 ## One line
 
-**TransactionManager first as orchestrator (implicit commit) → LockManager for threads → WAL for crashes → BEGIN/COMMIT last when commit means flush + release.**
+**TransactionManager first as orchestrator (implicit commit) → LockManager for threads → WAL for crashes → BEGIN/COMMIT last when commit means flush + release → color the `.puml` by subsystem so those edges stay visible.**

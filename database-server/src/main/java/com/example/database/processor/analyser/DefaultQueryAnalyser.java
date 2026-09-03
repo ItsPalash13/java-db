@@ -276,7 +276,7 @@ public final class DefaultQueryAnalyser implements QueryAnalyser {
             }
             columns.add(ColumnMetadata.define(column.name(), toColumnType(column.type())));
         }
-        return new AnalyzedCreateTable(database, table, columns);
+        return new AnalyzedCreateTable(database, table, columns, query.primaryKeyColumn());
     }
 
     private AnalyzedDropTable analyseDropTable(DropTableQuery query) {
@@ -406,7 +406,7 @@ public final class DefaultQueryAnalyser implements QueryAnalyser {
             }
             columnIds.add(columnId);
         }
-        return new AnalyzedCreateIndex(database, table, query.index(), columnIds);
+        return new AnalyzedCreateIndex(database, table, query.index(), columnIds, query.unique());
     }
 
     private AnalyzedDropIndex analyseDropIndex(DropIndexQuery query) {

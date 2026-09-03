@@ -4,8 +4,8 @@ import java.util.function.Supplier;
 
 /**
  * Owns concurrency locks so readers and writers do not clash on shared storage.
- * Catalog exclusive for CHECKPOINT / CREATE DATABASE; scoped database / table / row
- * locks for DML and table DDL.
+ * ENGINE IS/IX for DML/DQL/DDL; ENGINE X for CHECKPOINT quiesce. Catalog exclusive
+ * for schema persist; scoped database / table / row locks for DML and table DDL.
  */
 public interface LockManager {
 
@@ -24,6 +24,19 @@ public interface LockManager {
     void bindOwner(long ownerId);
 
     void clearOwnerBinding();
+
+    /**
+     * Engine-wide intention or exclusive. Modes: {@link LockMode#IS} (SELECT),
+     * {@link LockMode#IX} (DML/DDL), {@link LockMode#X} (CHECKPOINT).
+     */
+    void lockEngine(LockMode mode);
+
+    void unlockEngine(LockMode mode);
+
+    /** Run {@code action} under ENGINE X (queues concurrent ENGINE IS/IX holders). */
+    <T> T runWithEngineX(Supplier<T> action);
+
+    void runWithEngineX(Runnable action);
 
     <T> T runWithTable(String database, String table, LockMode tableMode, Supplier<T> action);
 
@@ -49,7 +62,8 @@ public interface LockManager {
 
     /**
      * READ COMMITTED: release shared locks (S, IS) at statement end while keeping X/IX
-     * until {@link #unlockAllForOwner()} on COMMIT/ABORT.
+     * until {@link #unlockAllForOwner()} on COMMIT/ABORT. ENGINE IS is released here;
+     * ENGINE IX is not.
      */
     void unlockSharedForOwner();
 }

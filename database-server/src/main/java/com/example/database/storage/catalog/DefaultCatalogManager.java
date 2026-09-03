@@ -16,6 +16,10 @@ import java.util.Set;
  * In-memory catalog. Owns {@link CatalogStore} when constructed with {@link PhysicalStorage}.
  * {@link #createTable} writes {@code db/table/catalog.json}; {@link #createDatabase} creates a folder.
  * {@link #load} fills memory on storage start.
+ * <p>
+ * Catalog memory is guarded by {@link #stateLock}: {@link #restoreSnapshot} must not leave an
+ * empty map visible to concurrent DML (clear-then-putAll races showed up as
+ * {@code table not in catalog} under mixed BEGIN/ROLLBACK load).
  */
 public final class DefaultCatalogManager implements CatalogManager {
 
@@ -27,6 +31,8 @@ public final class DefaultCatalogManager implements CatalogManager {
     private int nextTableId = 1;
     // Explicit BEGIN sessions defer catalog.json writes until COMMIT on this thread.
     private final ThreadLocal<Boolean> deferPersist = ThreadLocal.withInitial(() -> false);
+    // Guards tablesByDatabase / databaseNames / nextTableId against restoreSnapshot races.
+    private final Object stateLock = new Object();
 
     public DefaultCatalogManager() {
         this.catalogStore = null;
@@ -41,11 +47,13 @@ public final class DefaultCatalogManager implements CatalogManager {
     public Optional<TableMetadata> getTable(String database, String table) {
         Objects.requireNonNull(database, "database");
         Objects.requireNonNull(table, "table");
-        Map<String, TableMetadata> tables = tablesByDatabase.get(database);
-        if (tables == null) {
-            return Optional.empty();
+        synchronized (stateLock) {
+            Map<String, TableMetadata> tables = tablesByDatabase.get(database);
+            if (tables == null) {
+                return Optional.empty();
+            }
+            return Optional.ofNullable(tables.get(table));
         }
-        return Optional.ofNullable(tables.get(table));
     }
 
     @Override
@@ -60,45 +68,47 @@ public final class DefaultCatalogManager implements CatalogManager {
         String name = table.name();
         requireFolderName(database, "database");
         requireFolderName(name, "table");
-        if (!databaseNames.contains(database)) {
-            throw new CatalogException("database does not exist: " + database);
-        }
-        if (tableExists(database, name)) {
-            throw new CatalogException("table already exists: " + table.qualifiedName());
-        }
-        List<ColumnMetadata> columns = table.columns();
-        if (columns.isEmpty()) {
-            throw new CatalogException("table must have at least one column: " + table.qualifiedName());
-        }
-        Set<String> seen = new HashSet<>();
-        List<ColumnMetadata> assignedColumns = new ArrayList<>(columns.size());
-        int columnId = 1;
-        for (ColumnMetadata column : columns) {
-            if (!seen.add(column.name())) {
-                throw new CatalogException("duplicate column name: " + column.name());
+        synchronized (stateLock) {
+            if (!databaseNames.contains(database)) {
+                throw new CatalogException("database does not exist: " + database);
             }
-            assignedColumns.add(column.withId(columnId++));
-        }
-        int tableId = nextTableId;
-        TableMetadata created = table.withAssignedIds(tableId, assignedColumns);
-        tablesIn(database).put(name, created);
-        nextTableId = tableId + 1;
-        try {
-            persistSaveTable(created);
-        } catch (RuntimeException e) {
-            // Disk write failed: drop the in-memory table so memory and files stay aligned.
-            removeTableFromMemory(database, name);
-            nextTableId = tableId;
-            if (catalogStore != null) {
-                try {
-                    catalogStore.dropTable(database, name);
-                } catch (RuntimeException ignored) {
-                    // Best-effort cleanup of a partial shop/users/ directory.
+            if (tableExistsUnlocked(database, name)) {
+                throw new CatalogException("table already exists: " + table.qualifiedName());
+            }
+            List<ColumnMetadata> columns = table.columns();
+            if (columns.isEmpty()) {
+                throw new CatalogException("table must have at least one column: " + table.qualifiedName());
+            }
+            Set<String> seen = new HashSet<>();
+            List<ColumnMetadata> assignedColumns = new ArrayList<>(columns.size());
+            int columnId = 1;
+            for (ColumnMetadata column : columns) {
+                if (!seen.add(column.name())) {
+                    throw new CatalogException("duplicate column name: " + column.name());
                 }
+                assignedColumns.add(column.withId(columnId++));
             }
-            throw e;
+            int tableId = nextTableId;
+            TableMetadata created = table.withAssignedIds(tableId, assignedColumns);
+            tablesIn(database).put(name, created);
+            nextTableId = tableId + 1;
+            try {
+                persistSaveTable(created);
+            } catch (RuntimeException e) {
+                // Disk write failed: drop the in-memory table so memory and files stay aligned.
+                removeTableFromMemory(database, name);
+                nextTableId = tableId;
+                if (catalogStore != null) {
+                    try {
+                        catalogStore.dropTable(database, name);
+                    } catch (RuntimeException ignored) {
+                        // Best-effort cleanup of a partial shop/users/ directory.
+                    }
+                }
+                throw e;
+            }
+            return created;
         }
-        return created;
     }
 
     @Override
@@ -272,22 +282,28 @@ public final class DefaultCatalogManager implements CatalogManager {
 
     @Override
     public List<TableMetadata> allTables() {
-        List<TableMetadata> tables = new ArrayList<>();
-        for (Map<String, TableMetadata> perDatabase : tablesByDatabase.values()) {
-            tables.addAll(perDatabase.values());
+        synchronized (stateLock) {
+            List<TableMetadata> tables = new ArrayList<>();
+            for (Map<String, TableMetadata> perDatabase : tablesByDatabase.values()) {
+                tables.addAll(perDatabase.values());
+            }
+            return List.copyOf(tables);
         }
-        return List.copyOf(tables);
     }
 
     @Override
     public boolean databaseExists(String name) {
         Objects.requireNonNull(name, "name");
-        return databaseNames.contains(name);
+        synchronized (stateLock) {
+            return databaseNames.contains(name);
+        }
     }
 
     @Override
     public List<String> allDatabases() {
-        return List.copyOf(databaseNames);
+        synchronized (stateLock) {
+            return List.copyOf(databaseNames);
+        }
     }
 
     @Override
@@ -330,10 +346,12 @@ public final class DefaultCatalogManager implements CatalogManager {
         if (catalogStore == null) {
             return;
         }
-        tablesByDatabase.clear();
-        databaseNames.clear();
-        databaseNames.addAll(catalogStore.loadDatabases());
-        replaceAll(catalogStore.load());
+        synchronized (stateLock) {
+            tablesByDatabase.clear();
+            databaseNames.clear();
+            databaseNames.addAll(catalogStore.loadDatabases());
+            replaceAll(catalogStore.load());
+        }
     }
 
     @Override
@@ -343,17 +361,30 @@ public final class DefaultCatalogManager implements CatalogManager {
 
     @Override
     public CatalogSnapshot snapshot() {
-        return new CatalogSnapshot(tablesByDatabase, databaseNames, nextTableId);
+        synchronized (stateLock) {
+            return new CatalogSnapshot(tablesByDatabase, databaseNames, nextTableId);
+        }
     }
 
     @Override
     public void restoreSnapshot(CatalogSnapshot snapshot) {
         Objects.requireNonNull(snapshot, "snapshot");
-        tablesByDatabase.clear();
-        tablesByDatabase.putAll(deepCopyTables(snapshot.tablesByDatabase()));
-        databaseNames.clear();
-        databaseNames.addAll(snapshot.databaseNames());
-        nextTableId = snapshot.nextTableId();
+        // Build the replacement maps first; under the lock, skip no-op restores (DML-only
+        // explicit txns) and never expose a cleared empty catalog to concurrent getTable.
+        Map<String, Map<String, TableMetadata>> restored = deepCopyTables(snapshot.tablesByDatabase());
+        Set<String> restoredDatabases = new LinkedHashSet<>(snapshot.databaseNames());
+        int restoredNextId = snapshot.nextTableId();
+        synchronized (stateLock) {
+            CatalogSnapshot current = new CatalogSnapshot(tablesByDatabase, databaseNames, nextTableId);
+            if (current.equals(snapshot)) {
+                return;
+            }
+            tablesByDatabase.clear();
+            tablesByDatabase.putAll(restored);
+            databaseNames.clear();
+            databaseNames.addAll(restoredDatabases);
+            nextTableId = restoredNextId;
+        }
     }
 
     @Override
@@ -423,6 +454,12 @@ public final class DefaultCatalogManager implements CatalogManager {
 
     private Map<String, TableMetadata> tablesIn(String database) {
         return tablesByDatabase.computeIfAbsent(database, key -> new LinkedHashMap<>());
+    }
+
+    /** Caller must hold {@link #stateLock}. */
+    private boolean tableExistsUnlocked(String database, String table) {
+        Map<String, TableMetadata> tables = tablesByDatabase.get(database);
+        return tables != null && tables.containsKey(table);
     }
 
     private void removeTableFromMemory(String database, String table) {

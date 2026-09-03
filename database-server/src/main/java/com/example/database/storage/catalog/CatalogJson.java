@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Catalog snapshot ↔ JSON bytes. Kept here so {@code PhysicalStorage} never parses JSON
@@ -65,7 +66,13 @@ final class CatalogJson {
             }
             json.append("],\"unique\":").append(index.unique()).append('}');
         }
-        json.append("]}");
+        json.append(']');
+        // Persist PRIMARY KEY column name when present.
+        table.primaryKeyColumn().ifPresent(pk -> {
+            json.append(",\"primaryKeyColumn\":");
+            appendString(json, pk);
+        });
+        json.append('}');
     }
 
     private static void appendString(StringBuilder json, String value) {
@@ -127,7 +134,11 @@ final class CatalogJson {
                 }
                 indexes = List.copyOf(indexes);
             }
-            return new TableMetadata(tableId, database, name, columns, indexes);
+            // primaryKeyColumn is optional — tables created before Phase 7 will not have it.
+            Object pkValue = map.get("primaryKeyColumn");
+            Optional<String> primaryKeyColumn = pkValue instanceof String pk
+                    ? Optional.of(pk) : Optional.empty();
+            return new TableMetadata(tableId, database, name, columns, indexes, primaryKeyColumn);
         }
 
         private IndexMetadata indexFrom(Object item) {

@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -39,10 +40,12 @@ class IndexRestartTest {
             assertEquals("OK", processor.executeText(CREATE_USERS));
             assertEquals("OK", processor.executeText(CREATE_INDEX));
             assertIndex(first.catalogManager().getTable("shop", "users").orElseThrow());
+            assertTrue(Files.isRegularFile(root.resolve("shop").resolve("users").resolve("idx_users_id.idx")));
             assertTrue(Files.isRegularFile(root.resolve("shop").resolve("users").resolve("catalog.json")));
 
             assertEquals("OK", processor.executeText(DROP_INDEX));
             assertTrue(first.catalogManager().getTable("shop", "users").orElseThrow().indexes().isEmpty());
+            assertFalse(Files.exists(root.resolve("shop").resolve("users").resolve("idx_users_id.idx")));
         } finally {
             first.stop();
         }
@@ -55,6 +58,7 @@ class IndexRestartTest {
             DefaultQueryProcessor processor = new DefaultQueryProcessor(second);
             assertEquals("OK", processor.executeText(CREATE_INDEX));
             assertIndex(second.catalogManager().getTable("shop", "users").orElseThrow());
+            assertTrue(Files.isRegularFile(root.resolve("shop").resolve("users").resolve("idx_users_id.idx")));
         } finally {
             second.stop();
         }

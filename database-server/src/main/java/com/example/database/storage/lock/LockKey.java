@@ -13,6 +13,10 @@ public record LockKey(LockLevel level, String database, String table, Long rowId
         table = table == null ? "" : table;
     }
 
+    public static LockKey engine() {
+        return new LockKey(LockLevel.ENGINE, "", "", null);
+    }
+
     public static LockKey catalog() {
         return new LockKey(LockLevel.CATALOG, "", "", null);
     }

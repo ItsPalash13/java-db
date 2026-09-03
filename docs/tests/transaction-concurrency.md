@@ -1,6 +1,8 @@
 # Transaction Concurrency Manual Tests
 
-Manual scenarios for **READ COMMITTED**, **Strict 2PL**, **UndoManager rollback**, and **deadlock detection** (DETECT_RESOLVE). Run these with two interactive clients against a live server to verify behavior beyond automated JUnit tests.
+Manual scenarios for **READ COMMITTED**, **Strict 2PL**, **UndoManager rollback**, and **deadlock detection** (DETECT_RESOLVE). Two interactive clients against a live server.
+
+Catalog / PK / index / ALTER / CHECKPOINT / restart walkthroughs: [client-manual.md](client-manual.md). Start commands: [README.md](README.md).
 
 **Design reference:** `docs/temp-dev-notes/Transaction Concurrency & Recovery Design.md`
 
@@ -294,9 +296,9 @@ Reset row 1 after test.
 | ---- | ------ | --------------------------------- | ------------------------------------- |
 | 1    | A      | `BEGIN`                           | `OK`                                  |
 | 2    | A      | `CREATE TABLE shop.temp (id INT)` | `OK`                                  |
-| 3    | B      | `SHOW TABLES`                     | `temp` **not listed** (not committed) |
+| 3    | B      | `SHOW TABLES FROM shop`           | `temp` **not listed** (not committed) |
 | 4    | A      | `ROLLBACK`                        | `OK`                                  |
-| 5    | B      | `SHOW TABLES`                     | Still no `temp`                       |
+| 5    | B      | `SHOW TABLES FROM shop`           | Still no `temp`                       |
 
 
 **Automated tests:** `ExplicitTransactionIntegrationTest.beginCreateTwoTablesCommitPersistsBoth`, `beginCreateTwoTablesRollbackPersistsNeither`
@@ -336,15 +338,14 @@ Reset row 1 after test.
 
 
 
-## Known limitations (Phase 1)
+## Known limitations
 
-Not bugs for this phase — documented gaps for Phase 2+:
+Not bugs — product gaps (see `docs/product/README.md`):
 
-1. **Heap is in-memory** — DML is lost on server restart; catalog persists.
-2. **No physical indexes** — all plans use table scan (`SeqScan`); `UPDATE`/`DELETE` with non-id `WHERE` may briefly X-lock every row in the table.
-3. **REPEATABLE READ** — enum stub only; not implemented.
-4. **Lock wait timeout** — 30 seconds (catalog lock wait logged at server start).
-5. **Write skew** — READ COMMITTED does not prevent multi-row invariant violations without predicate locks.
+1. **READ COMMITTED only** — non-repeatable read, phantom, write skew are allowed; `REPEATABLE READ` is an enum stub.
+2. **Lock wait timeout** — default 30s.
+3. **Same-table DDL vs uncommitted DML** — table **X** waits on table **IX**; mixed load can convoy (do not use as a soak test).
+4. **Write prefilter** — some `UPDATE`/`DELETE` `WHERE col = literal` paths filter the scan snapshot before locking; scenario 11 covers the wait-on-every-row path.
 
 ---
 
@@ -352,7 +353,7 @@ Not bugs for this phase — documented gaps for Phase 2+:
 
 ## Quick checklist
 
-Use this when validating a build before Phase 2:
+Use this when validating isolation on a build:
 
 - [ ] Scenario 1 — reader sees `Ada` after writer rollback
 - [ ] Scenario 2 — delete does not remove row after rollback

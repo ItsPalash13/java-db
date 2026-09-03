@@ -65,6 +65,7 @@ classDiagram
         -String database
         -String table
         -List~ColumnMetadata~ columns
+        -Optional~String~ primaryKeyColumn
     }
 
     class AnalyzedCreateDatabase {
@@ -224,6 +225,7 @@ classDiagram
         -String database
         -String table
         -List~ColumnMetadata~ columns
+        -Optional~String~ primaryKeyColumn
     }
 
     class CreateDatabasePlan {
@@ -510,6 +512,8 @@ classDiagram
         -Set~String~ databaseNames
         -CatalogStore catalogStore
         -int nextTableId
+        -Object stateLock
+            // restoreSnapshot skips no-op; synchronized with getTable (no empty-map window)
         +getTable(String database, String table) Optional~TableMetadata~
         +tableExists(String database, String table) boolean
         +createTable(TableMetadata table) TableMetadata
@@ -533,6 +537,7 @@ classDiagram
         -String name
         -List~ColumnMetadata~ columns
         -List~IndexMetadata~ indexes
+        -Optional~String~ primaryKeyColumn
         +define(String database, String name, List~ColumnMetadata~ columns) TableMetadata
     }
 
@@ -592,6 +597,22 @@ classDiagram
         +delete(String database, String table, long rowId)
         +dropTable(String database, String table)
         +dropDatabase(String database)
+        +prepareTable(String database, String table)
+    }
+
+    class TableHeapFiles {
+        <<concrete>>
+        +ibdPath(String database, String table) String
+    }
+
+    class FileTableStore {
+        <<concrete>>
+        -CatalogManager catalogManager
+        -BufferPool bufferPool
+        -PhysicalStorage physicalStorage
+        +insert / scan / update / delete / findByRowId / restoreRow
+        +prepareTable / dropTable / dropDatabase / setSuppressSideEffects
+            // restoreRow: IndexMaintainer unless suppressSideEffects; redo uses INDEX_* WAL
     }
 
     class InMemoryTableStore {
@@ -656,6 +677,34 @@ classDiagram
 
     class IndexStore {
         <<interface>>
+        +createIndex(...)
+        +dropIndex(...)
+        +insert(...) / delete(...) / lookupEquals(...) / lookupRange(...)
+    }
+
+    class IndexRange {
+        <<record>>
+    }
+
+    class IndexSortedBuilder {
+        <<concrete>>
+    }
+
+    class IndexPageWal {
+        <<concrete>>
+    }
+
+    class IndexScanSpec {
+        <<concrete>>
+    }
+
+    class FileIndexStore {
+        <<concrete>>
+    }
+
+    class IndexScanOperator {
+        <<concrete>>
+        +lookupRange via IndexScanSpec
     }
 
     class LockManager {
@@ -666,10 +715,14 @@ classDiagram
         +unlockExclusiveCatalog()
         +bindOwner(long ownerId)
         +clearOwnerBinding()
+        +lockEngine(LockMode mode)
+        +unlockEngine(LockMode mode)
+        +runWithEngineX(...)
         +runWithTable(String db, String table, LockMode mode, ...)
         +runWithDatabase(String db, LockMode mode, ...)
         +lockTable / unlockTable / lockRow / unlockRow
         +unlockAllForOwner()
+        +unlockSharedForOwner()
     }
 
     class LockMode {
@@ -680,8 +733,18 @@ classDiagram
         X
     }
 
+    class LockLevel {
+        <<enumeration>>
+        ENGINE
+        CATALOG
+        DATABASE
+        TABLE
+        ROW
+    }
+
     class LockKey {
         <<record>>
+        +engine() LockKey
         +catalog() LockKey
         +database(String) LockKey
         +table(String, String) LockKey
@@ -706,7 +769,8 @@ classDiagram
         -ReentrantLock stateMutex
         -Map~LockKey, LockState~ states
         -Duration lockWait
-        +runExclusiveCatalog / runWithTable / runWithDatabase
+        +runExclusiveCatalog / lockEngine / runWithEngineX
+        +runWithTable / runWithDatabase
         +lockTable / lockRow / unlockAllForOwner
     }
 
@@ -736,6 +800,8 @@ classDiagram
         +runInTransaction(LockManager, TableStore, Supplier~T~ action) T
         +beginExplicit / commitExplicit / rollbackExplicit
             // READ COMMITTED + Strict 2PL; DML undo via UndoManager
+            // rollbackExplicit always unlocks + clears session even if undo throws
+            // also drops .idx/.ibd created after BEGIN
     }
 
     class UndoManager {
@@ -743,6 +809,7 @@ classDiagram
         +recordInsert / recordUpdate / recordDelete
         +rollback(txnId, TableStore)
         +clear(txnId)
+            // Index* undo API optional; IndexMaintainer relies on heap undo + re-maintain
     }
 
     class IsolationLevel {
@@ -921,6 +988,8 @@ classDiagram
         UPDATE
         INSERT
         DELETE
+        PRIMARY
+        KEY
         INT
         VARCHAR
         BOOLEAN_TYPE
@@ -1037,6 +1106,7 @@ classDiagram
         <<concrete>>
         -String name
         -ColumnSqlType type
+        -boolean primaryKey
     }
 
     class QualifiedTable {
@@ -1050,6 +1120,7 @@ classDiagram
         <<concrete>>
         -QualifiedTable table
         -List~ColumnDefinition~ columns
+        -Optional~String~ primaryKeyColumn
     }
 
     class Expression {
@@ -1293,15 +1364,19 @@ classDiagram
     CommandExecutor --> TableStore : dropTable / dropDatabase
     DescribeExecutor --> CatalogManager : reads
     CommandExecutor --> TransactionManager : implicit txn / explicit append
-    CommandExecutor --> LockManager : table X / database X / catalog X
+    CommandExecutor --> LockManager : ENGINE IX + table X / database X / catalog X
     CommandExecutor --> WALManager : append (flush at commit)
     VolcanoExecutor --> TableStore : DML/DQL
-    VolcanoExecutor --> LockManager : table IS/IX + row S/X
+    VolcanoExecutor --> LockManager : ENGINE IS/IX + table IS/IX + row S/X
     VolcanoExecutor --> TransactionManager : implicit txn per statement
     VolcanoExecutor ..> VolcanoOperator : compiles plan
     VolcanoOperator ..> Tuple
     ExpressionEvaluator ..> Tuple
+    TableStore <|.. FileTableStore
     TableStore <|.. InMemoryTableStore
+    FileTableStore --> BufferPool
+    FileTableStore --> CatalogManager
+    FileTableStore --> RidMap
     InMemoryTableStore --> Tuple
     RidMap <|.. InMemoryRidMap
     InMemoryRidMap --> Rid
@@ -1313,7 +1388,10 @@ classDiagram
     RowCodec ..> Tuple
     HeapPage ..> PageLayoutException : throws
     TransactionControlExecutor --> TransactionManager : begin/commit/rollback
-    CheckpointExecutor --> LockManager : runExclusiveCatalog
+    CheckpointExecutor --> LockManager : runWithEngineX + catalog
+    CheckpointExecutor --> BufferPool : flushAll
+    CheckpointExecutor --> WALManager : flush + checkpoint
+    CheckpointScheduler --> BufferPool : flushAll
     CheckpointExecutor --> WALManager : checkpoint
     CheckpointExecutor --> TransactionManager : reject if explicit
     TransactionManager <|.. DefaultTransactionManager
@@ -1350,7 +1428,7 @@ classDiagram
     CommandExecutor ..> CreateIndexPlan
     CommandExecutor ..> DropIndexPlan
     StorageEngine --> TableStore : owns
-    DefaultStorageEngine --> InMemoryTableStore : constructs
+    DefaultStorageEngine --> FileTableStore : constructs
     StorageEngine --> IndexStore : owns
     StorageEngine --> BufferPool : owns
     DefaultStorageEngine --> DefaultBufferPool : constructs

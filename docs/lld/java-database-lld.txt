@@ -39,6 +39,7 @@ DefaultQueryProcessor
 - queryDispatcher: QueryDispatcher   // lookup + delegate on caller thread; not a thread pool
 - storageEngine: StorageEngine
 + execute(query: String): QueryResult
+    // catches IndexStoreException (unique/PK violations) and IllegalArgumentException (PK NOT NULL)
 
 
 <<interface>>
@@ -63,6 +64,7 @@ AnalyzedCreateTable
 - database: String
 - table: String
 - columns: List<ColumnMetadata>   // no ids yet; nullable defaults true
+- primaryKeyColumn: Optional<String>
 
 
 <<concrete>>
@@ -211,6 +213,7 @@ CreateTablePlan
 - database: String
 - table: String
 - columns: List<ColumnMetadata>   // no ids yet; catalog assigns on execute
+- primaryKeyColumn: Optional<String>
 
 
 <<concrete>>
@@ -267,12 +270,25 @@ AccessPath
 
 
 <<concrete>>
+IndexScanSpec
+- indexName, lowKey, highKey, prefixColumns, equality flag
+    // planner attaches when AccessPathChooser picks INDEX_SCAN; best-index heuristic:
+    // equality +10, unique +5, prefixColumns bonus; tie-break narrower key then catalog order
+
+
+<<record>>
+AccessPathChoice
+accessPath + optional IndexScanSpec
+
+
+<<concrete>>
 SelectPlan
 - database: String
 - table: String
 - projections: List<ResolvedProjection>
 - where: Expression
 - accessPath: AccessPath
+- indexScanSpec: IndexScanSpec (optional)
 
 
 <<concrete>>
@@ -289,6 +305,7 @@ UpdatePlan
 - assignments: List<ResolvedAssignment>
 - where: Expression
 - accessPath: AccessPath
+- indexScanSpec: IndexScanSpec (optional)
 
 
 <<concrete>>
@@ -353,15 +370,19 @@ CommandExecutor
     // begin txn → catalog lock → append+flush WAL → catalog write → unlock → commit
     // CREATE_TABLE / DROP_TABLE / CREATE_DATABASE / DROP_DATABASE / ADD_COLUMN / DROP_COLUMN / CREATE_INDEX / DROP_INDEX
     // DROP TABLE/DATABASE also clears TableStore heaps so recreate does not see stale RAM rows
+    // On CREATE_TABLE with PRIMARY KEY, auto-creates unique index pk_<table>_<col>.
     // writes catalog; not Volcano
 
 
 <<concrete>>
 VolcanoExecutor
 - tableStore: TableStore
+- indexStore: IndexStore
 - lockManager: LockManager
 - transactionManager: TransactionManager
+- catalogManager: CatalogManager
 + execute(plan: ExecutionPlan): QueryResult
+    // INDEX_SCAN → IndexScanOperator; else SeqScan
     // SELECT: table IS + row S (released per tuple / statement); writes: table IX + row X until COMMIT
     // READ COMMITTED: unlockSharedForOwner at statement end; explicit lock failure → rollbackExplicit
     // implicit txn via TransactionManager.runInTransaction(lockManager, tableStore, …)
@@ -426,7 +447,7 @@ CheckpointExecutor
 - walManager: WALManager
 - transactionManager: TransactionManager
 + execute(plan: ExecutionPlan): QueryResult
-    // CHECKPOINT SQL → exclusive catalog → WALManager.checkpoint()
+    // CHECKPOINT SQL → ENGINE X → flush WAL → bufferPool.flushAll → WALManager.checkpoint()
     // refused inside explicit BEGIN (deferred catalog persist)
 
 
@@ -454,9 +475,9 @@ StorageEngine
 + lockManager(): LockManager   // requires start(); throws if not started
 + walManager(): WALManager   // requires start(); throws if not started
 + tableStore(): TableStore   // requires start(); throws if not started
-+ bufferPool(): BufferPool   // requires start(); wired; unused by DML until FileTableStore
-owns (wired): CatalogManager, PhysicalStorage, TransactionManager, LockManager, WALManager, CheckpointScheduler, UndoableTableStore(InMemoryTableStore), DefaultBufferPool
-owns (stubs, not wired): IndexStore
++ bufferPool(): BufferPool   // requires start(); shared by .ibd and .idx
++ indexStore(): IndexStore   // requires start(); FileIndexStore B+ trees
+owns (wired): CatalogManager, PhysicalStorage, TransactionManager, LockManager, WALManager, CheckpointScheduler, UndoableTableStore(FileTableStore + IndexMaintainer), FileIndexStore, DefaultBufferPool
 exists (codecs; used by pool newPage / tests): HeapPage, RowCodec, RidMap / InMemoryRidMap
 
 
@@ -495,6 +516,7 @@ DefaultCatalogManager
 - databaseNames: Set<String>
 - catalogStore: CatalogStore   // null in memory-only tests; JsonCatalogStore when given PhysicalStorage
 - nextTableId: int             // global across databases
+- stateLock: Object            // getTable/snapshot/restoreSnapshot; skip no-op restore; no empty-map window
 + getTable / tableExists / createTable / dropTable / addColumn / dropColumn / createIndex / dropIndex / allTables
 + databaseExists / allDatabases / createDatabase / dropDatabase / load
 
@@ -524,7 +546,8 @@ TableMetadata
 - database: String
 - name: String
 - columns: List<ColumnMetadata>
-- indexes: List<IndexMetadata>   // catalog-only definitions; no IndexStore yet
+- indexes: List<IndexMetadata>   // catalog definitions; FileIndexStore builds matching .idx trees
+- primaryKeyColumn: Optional<String>
 + define(database, name, columns): TableMetadata
 + withIndexes(indexes): TableMetadata
 + qualifiedName(): String   // shop.users
@@ -568,6 +591,26 @@ owns actual table data (rows); does not own schema (CatalogManager)
 + delete(database: String, table: String, rowId: long)
 + dropTable(database: String, table: String)
 + dropDatabase(database: String)
++ prepareTable(database: String, table: String)   // default no-op; FileTableStore creates .ibd
+
+
+<<concrete>>
+TableHeapFiles
++ ibdPath(database, table): String   // e.g. shop/users/users.ibd
+
+
+<<concrete>>
+FileTableStore
+- catalogManager: CatalogManager
+- bufferPool: BufferPool
+- physicalStorage: PhysicalStorage
+- heaps: Map<String, HeapState>   // per-table RidMap, nextRowId, lastPageId
++ insert / scan / update / delete / findByRowId / restoreRow
++ prepareTable / dropTable / dropDatabase / setSuppressSideEffects
+    // page-backed .ibd through BufferPool; RidMap rebuilt on open by heap scan
+    // restoreRow: runs IndexMaintainer unless suppressSideEffects (DML redo uses INDEX_* WAL instead)
+    // growing UPDATE: tombstone + re-insert + update RidMap
+    // PRIMARY KEY implies NOT NULL: reject null primaryKey values on insert/update.
 
 
 <<concrete>>
@@ -575,8 +618,7 @@ InMemoryTableStore
 - tables: Map<String, List<Tuple>>   // key "shop.users"
 - nextRowId: AtomicLong
 + insert / scan / update / delete / dropTable / dropDatabase
-    // temporary RAM heaps; lost on restart; not WAL-logged
-    // FileTableStore / pages later
+    // tests and undo helpers; DefaultStorageEngine uses FileTableStore instead
 
 
 <<concrete>>
@@ -651,21 +693,66 @@ corrupt page / codec mismatch / page full
 
 <<interface>>
 IndexStore
-owns indexes
+owns on-disk B+ tree indexes ({indexName}.idx)
++ createIndex(database, table, index, keyTypes)
++ dropIndex(database, table, indexName)
++ dropTableIndexes(database, table, indexes)
++ insert(database, table, indexName, key, rid)
++ delete(database, table, indexName, key, rid)
++ lookupEquals(database, table, indexName, key): Iterator<Rid>
++ lookupRange(database, table, indexName, range: IndexRange): Iterator<Rid>
+    // leaf sibling walk via nextLeafPageId; IndexRange carries prefix bounds
+
+
+<<record>>
+IndexRange
+lowKey, lowInclusive, highKey, highInclusive, prefixColumns
+
+
+<<concrete>>
+IndexSortedBuilder
+    // sort-build CREATE INDEX: pack leaves, link siblings, build internals
+
+
+<<concrete>>
+IndexPageWal
+    // append-only index-wal.log; WAL-before-data on .idx flush; replay on engine start
+
+
+<<concrete>>
+FileIndexStore implements IndexStore
+- bufferPool, physicalStorage, keyTypesByIndex, uniqueByIndex
+    // page 0 INDEX_META; bulkLoadSorted; delete merge/borrow for leaf + internal (rebalanceInternalAfterDelete cascade); unique enforcement
+
+
+<<concrete>>
+IndexMaintainer
+- catalogManager, indexStore, transactionManager, walManager
+    // hooks FileTableStore DML; logical INDEX_* WAL only — no Index* undo (heap undo re-maintains)
+
+
+<<interface>>
+UndoManager
++ recordInsert / recordUpdate / recordDelete
++ recordIndexInsert / recordIndexDelete
++ rollback(txnId, tableStore) / clear(txnId)
+    // rollback applies heap undo then index undo via stored IndexStore
 
 
 <<interface>>
 LockManager
-owns concurrency locks: catalog exclusive + scoped database/table/row (IS/IX/S/X)
+owns concurrency locks: ENGINE IS/IX/X + catalog exclusive + scoped database/table/row (IS/IX/S/X)
 + runExclusiveCatalog(action: Runnable)
 + runExclusiveCatalog(action: Supplier<T>): T
 + lockExclusiveCatalog()   // waits up to lockWait; throws CatalogLockException on timeout
 + unlockExclusiveCatalog()
 + bindOwner(ownerId: long) / clearOwnerBinding()
++ lockEngine(mode) / unlockEngine(mode)   // IS SELECT, IX DML/DDL, X CHECKPOINT
++ runWithEngineX(action)   // quiesce: conflicts with ENGINE IS/IX
 + runWithTable(db, table, LockMode, action)   // parent IS/IX inside
 + runWithDatabase(db, LockMode.X, action)
 + lockTable / unlockTable / lockRow / unlockRow / unlockAllForOwner() / unlockSharedForOwner()
-    // READ COMMITTED: unlockSharedForOwner drops S+IS at statement end; X/IX until COMMIT/ABORT
+    // READ COMMITTED: unlockSharedForOwner drops S+IS (incl. ENGINE IS); X/IX until COMMIT/ABORT
 
 
 <<enumeration>>
@@ -673,15 +760,11 @@ IsolationLevel
 READ_COMMITTED, REPEATABLE_READ (not implemented)
 
 
-<<interface>>
-UndoManager
-+ recordInsert / recordUpdate / recordDelete
-+ rollback(txnId, tableStore) / clear(txnId)
-
-
 <<concrete>>
 DefaultUndoManager
 - recordsByTxn: Map<Integer, List<UndoRecord>>
+- indexStore: IndexStore
+    // Index* undo API exists; IndexMaintainer does not record them — heap undo re-runs IndexMaintainer
     // rollback applies to TableStore delegate (not UndoableTableStore wrapper)
 
 
@@ -699,9 +782,14 @@ IS, IX, S, X
 + intentionFor(childMode): LockMode
 
 
+<<enumeration>>
+LockLevel
+ENGINE, CATALOG, DATABASE, TABLE, ROW
+
+
 <<record>>
 LockKey
-catalog() / database(name) / table(db, table) / row(db, table, rowId)
+engine() / catalog() / database(name) / table(db, table) / row(db, table, rowId)
 
 
 <<concrete>>
@@ -727,9 +815,10 @@ DefaultLockManager
 - heldByOwner: Map<Long, List<HeldLock>>
 - lockWait: Duration   // from ServerEnvironment; default 30s
 - deadlockMode: DETECT_RESOLVE (wait-for graph; ABORT_YOUNGEST default)
-+ runExclusiveCatalog / runWithTable / runWithDatabase
++ runExclusiveCatalog / lockEngine / runWithEngineX / runWithTable / runWithDatabase
 + lockTable / lockRow / unlockAllForOwner / unlockSharedForOwner
 + lockRow: read-your-writes — skip S if owner already holds X on row
+    // hierarchy acquire order: ENGINE → catalog (if needed) → database → table → row
 
 
 <<interface>>
@@ -760,6 +849,7 @@ DefaultTransactionManager
 - activeExplicitSessions: AtomicInteger
 - context: ThreadLocal<TransactionContext>  // catalog snapshot at BEGIN
 + explicit: BEGIN snapshots catalog only; DML undo via UndoManager; COMMIT brief catalog X
++ rollbackExplicit: drop .idx/.ibd created after BEGIN, restore catalog snapshot, persist, always unlock
 + VolcanoExecutor + DefaultQueryProcessor rollback explicit session on LockException
 
 
@@ -777,12 +867,15 @@ routes BeginPlan / CommitPlan / RollbackPlan to TransactionManager
 
 <<interface>>
 WALManager
-owns durable change logging (catalog DDL today; page records later)
+owns durable change logging (catalog DDL + logical DML/index redo)
 + append(record: WalRecord)          // pending until flush
++ appendReturningLsn(record): long   // monotonic LSN for heap page stamp
 + flush()                            // write wal.log + force durable
++ flushUpTo(lsn: long)               // WAL-before-data gate
 + discardPending()                   // rollback of unflushed records
-+ replay(catalog: CatalogManager): int   // after catalog.load(); COMMIT-gated; merges wal.checkpoint maxTxnId
-+ checkpoint(): int                  // durable-only: update wal.checkpoint + append CHECKPOINT line (wal.log never rewritten)
++ replay(catalog: CatalogManager): int   // catalog only; skips DML ops
++ redoDml(tableStore, indexStore)    // committed logical DML after last CHECKPOINT
++ checkpoint(): int                  // fence after caller flushed WAL + dirty pages
 
 
 <<concrete>>
@@ -800,8 +893,10 @@ WalCheckpointMeta
 DefaultWALManager
 - physicalStorage: PhysicalStorage
 - pending: ThreadLocal<List<WalRecord>>
-+ append / flush / discardPending / replay / checkpoint
-    // files: wal.log, wal.checkpoint under store root; JSON lines with txnId + COMMIT marker
+- nextLsn / durableLsn: AtomicLong
++ append / appendReturningLsn / flush / flushUpTo / discardPending / replay / redoDml / checkpoint
+    // files: wal.log, wal.checkpoint under store root; JSON lines with txnId + lsn + COMMIT marker
+    // WalOp includes INSERT_ROW, UPDATE_ROW, DELETE_ROW, INDEX_INSERT, INDEX_DELETE
 
 
 <<interface>>
@@ -833,7 +928,7 @@ CheckpointScheduler
 - lockManager: LockManager
 - walManager: WALManager
 + start() / stop()
-    // daemon loop: awaitTrigger → runExclusiveCatalog(walManager::checkpoint)
+    // daemon loop: awaitTrigger → runWithEngineX(() → runExclusiveCatalog(walManager::checkpoint))
     // manual CHECKPOINT is CheckpointExecutor, not a strategy
 
 
@@ -1007,7 +1102,7 @@ LexException
 
 <<enumeration>>
 TokenCatalog
-CREATE, ALTER, DROP, DATABASE, TABLE, INDEX, COLUMN, ADD, ON,
+CREATE, ALTER, DROP, DATABASE, TABLE, INDEX, PRIMARY, KEY, COLUMN, ADD, ON,
 SELECT, UPDATE, DELETE, INSERT,
 INTO, FROM, SET, VALUES, WHERE,
 INT, VARCHAR, BOOLEAN_TYPE,
@@ -1088,6 +1183,7 @@ INT, VARCHAR, BOOLEAN
 ColumnDefinition
 - name: String
 - type: ColumnSqlType
+- primaryKey: boolean
 
 
 <<concrete>>
@@ -1101,6 +1197,7 @@ QualifiedTable
 CreateTableQuery
 - table: QualifiedTable
 - columns: List<ColumnDefinition>
+- primaryKeyColumn: Optional<String>
 
 
 <<interface>>
@@ -1232,6 +1329,7 @@ ClientConnection (client module)
 <<concrete>>
 WireResponse (client.wire)
 WireResponseJson (client.wire, parse)
+    // RESULT_SET cells may be JSON null (SQL NULL); List.copyOf is not used on rows
 ResponsePrinter
 
 
@@ -1248,15 +1346,15 @@ DatabaseServer
       │              │               │         └── uses PhysicalStorage
       │              │               └── TableMetadata → ColumnMetadata → ColumnType
       │              ├── TransactionManager → DefaultTransactionManager
-      │              ├── LockManager → DefaultLockManager (catalog X + scoped db/table/row)
+      │              ├── LockManager → DefaultLockManager (ENGINE + catalog X + scoped db/table/row)
       │              ├── WALManager → DefaultWALManager (wal.log + wal.checkpoint)
       │              ├── CheckpointScheduler → CheckpointStrategy (timeout | wal_size)
       │              │         └── CommandExecutor: txn → lock → WAL append+flush → CatalogManager (+ TableStore drop)
-      │              │         └── CheckpointExecutor: CHECKPOINT → lock → walManager.checkpoint()
-      │              ├── TableStore → InMemoryTableStore (RAM rows; temporary)
+      │              │         └── CheckpointExecutor: CHECKPOINT → ENGINE X → catalog → walManager.checkpoint()
+      │              ├── TableStore → FileTableStore (.ibd pages via BufferPool)
       │              ├── BufferPool → DefaultBufferPool (wired; flushAll on stop; DML unused)
       │              ├── page codecs: HeapPage, RowCodec, RidMap (newPage uses HeapPage)
-      │              └── (later) IndexStore / FileTableStore
+      │              └── (later) IndexStore
       ├── uses ▶ QueryProcessor
       │              │
       │              └── DefaultQueryProcessor coordinates
@@ -1284,7 +1382,7 @@ DatabaseServer owns StorageEngine and NetworkModule lifecycles; uses QueryProces
 NetworkModule owns RequestHandler.
 Wire protocol v1: request frame = plain UTF-8 SQL; response frame = JSON WireResponse (see docs/protocol/wire-protocol.md). QueryProcessor returns QueryResult; DefaultRequestHandler calls result.toWireResponse() (Ok, Error, or ResultSet+Done). executeText() / toResponse() remain for tests and logging.
 DefaultQueryProcessor owns QueryLexer, QueryParser, and QueryPlanner; builds DefaultQueryAnalyser and QueryDispatcher on first catalog use from StorageEngine managers (requires start()). Uses StorageEngine (does not own its lifecycle).
-execute() lexes, parses, analyses, plans, then runs plans through QueryDispatcher. Implicit DDL: TransactionManager.runInTransaction → LockManager.runExclusiveCatalog → WAL append (txnId) → CatalogManager → COMMIT+flush. Explicit BEGIN: TransactionControlExecutor holds lock, defer catalog persist until COMMIT. CHECKPOINT: CheckpointExecutor → exclusive catalog → WALManager.checkpoint() (update wal.checkpoint, append CHECKPOINT to wal.log — append-only); refused inside explicit txn. Background CheckpointScheduler plugs one CheckpointStrategy (timeout or wal_size) when CHECKPOINT_ENABLED. DESCRIBE / SHOW DATABASES / SHOW TABLES read CatalogManager only (no txn, lock, or WAL). Table names are database.table. SELECT / INSERT / UPDATE / DELETE are analysed and planned (table vs index scan from catalog IndexMetadata); VolcanoExecutor compiles plans into pull operators over InMemoryTableStore (INDEX_SCAN = SeqScan until B+Tree). SeqScan (SELECT) takes row S-lock then re-reads via TableStore.findByRowId — heap scan snapshot at open() can be stale after lock wait. UPDATE/DELETE use WriteScanPrefilter: pre-lock Filter only for WHERE id = literal; otherwise UpdateOperator/DeleteOperator lock each heap row, re-read, then evaluate WHERE (unlock X if row gone or WHERE fails and lock was taken this statement). Empty SELECT returns a result set with zero rows (executeText still "OK"). Rows are RAM-only — restart keeps catalog, SELECT is empty. DROP TABLE/DATABASE clears store heaps via CommandExecutor. VectorizedExecutor / BatchExecutor exist as stubs but are not registered. Unresolved plans still echo OK <query>.
+execute() lexes, parses, analyses, plans, then runs plans through QueryDispatcher. Implicit DDL: TransactionManager.runInTransaction → ENGINE IX → table/db locks → LockManager.runExclusiveCatalog → WAL append (txnId) → CatalogManager → COMMIT+flush. Explicit BEGIN: TransactionControlExecutor holds lock, defer catalog persist until COMMIT. CHECKPOINT: CheckpointExecutor → ENGINE X → flush WAL → bufferPool.flushAll → exclusive catalog → WALManager.checkpoint(); refused inside explicit txn or while other BEGIN sessions active. Background CheckpointScheduler plugs one CheckpointStrategy (timeout or wal_size) when CHECKPOINT_ENABLED; same ENGINE X + flushAll + fence path. DESCRIBE / SHOW DATABASES / SHOW TABLES read CatalogManager only (no txn, lock, or WAL). Table names are database.table. SELECT / INSERT / UPDATE / DELETE are analysed and planned (table vs index scan from catalog IndexMetadata); VolcanoExecutor takes ENGINE IS (SELECT) or ENGINE IX (DML) before table/row locks. SeqScan (SELECT) takes row S-lock then re-reads via TableStore.findByRowId — heap scan snapshot at open() can be stale after lock wait. UPDATE/DELETE use WriteScanPrefilter: pre-lock Filter only for WHERE id = literal; otherwise UpdateOperator/DeleteOperator lock each heap row, re-read, then evaluate WHERE (unlock X if row gone or WHERE fails and lock was taken this statement). Empty SELECT returns a result set with zero rows (executeText still "OK"). DROP TABLE/DATABASE clears store heaps via CommandExecutor. VectorizedExecutor / BatchExecutor exist as stubs but are not registered. Unresolved plans still echo OK <query>.
 Lex/parse errors become the response via LexException/ParseException.toResponse() (exact 0-based index).
 Lexer types live under com.example.database.processor.lexer (unchanged names).
 Parser types live under com.example.database.processor.parser.
@@ -1296,7 +1394,7 @@ database-client is a separate Maven module: DatabaseClient REPL over the same le
 
 Catalog (Phase 1.1–1.3):
 CatalogManager is a StorageEngine submodule and owns CatalogStore.
-DefaultStorageEngine constructs PhysicalStorage, DefaultCatalogManager, DefaultWALManager, DefaultUndoManager, DefaultTransactionManager(wal, undo), DefaultLockManager (DETECT_RESOLVE), CheckpointScheduler (strategy from ServerEnvironment), UndoableTableStore over InMemoryTableStore, and DefaultBufferPool. start() loads catalog, replays WAL (COMMIT-gated; merges wal.checkpoint maxTxnId), seeds next txnId, starts scheduler if enabled. stop() flushes dirty buffer-pool pages then stops the scheduler.
+DefaultStorageEngine constructs PhysicalStorage, DefaultCatalogManager, DefaultWALManager, FileIndexStore, DefaultUndoManager(indexStore), DefaultTransactionManager(wal, undo), DefaultLockManager (DETECT_RESOLVE), CheckpointScheduler (strategy from ServerEnvironment + BufferPool), DefaultBufferPool (WAL flush gate + IndexPageWal hook), IndexMaintainer (logical INDEX_* WAL), and UndoableTableStore over FileTableStore (logical row WAL + page LSN). start() loads catalog, catalog replay, DML redo, IndexPageWal.replay, loads index key types, seeds next txnId, starts scheduler if enabled. stop() flushes dirty buffer-pool pages then stops the scheduler.
 start() calls catalogManager.load() — the engine does not touch catalog files.
 createTable assigns ids and writes data/<db>/<table>/catalog.json. Restart: new engine, start, getTable("shop","users").
 CREATE DATABASE creates data/<name>/; DROP DATABASE removes an empty directory (fails if tables remain). load() lists those directories and per-table catalogs.
@@ -1313,9 +1411,9 @@ Page layout (Phase 2):
 HeapPage / RowCodec / Rid / RidMap live under storage.page. Pure codecs over byte[pageSize]; default 16 KiB.
 Header (24 B) + slot directory (4 B × slotCount) + free [lower,upper) + packed row payloads from the high end.
 rowId remains the lock/undo key; Rid=(pageId,slotId) is the heap address. InMemoryRidMap is RAM-only.
-TableStore is still InMemoryTableStore. BufferPool.newPage writes an empty HeapPage image when extending a file.
+TableStore is FileTableStore (one .ibd per table; RidMap in RAM, rebuilt on open). BufferPool.newPage writes an empty HeapPage image when extending a file.
 
 BufferPool (Phase 3):
 DefaultBufferPool is constructed by DefaultStorageEngine; pin/unpin, per-frame S/X latch, dirty bit, clock eviction.
 Page key is (file, pageId). Phase 3 never evicts dirty frames (no-steal until DML WAL); flush/flushAll write them.
-stop() calls flushAll(). Catalog JSON and wal.log stay off the pool. DML does not use the pool until FileTableStore.
+stop() calls flushAll(). Catalog JSON and wal.log stay off the pool. CommandExecutor.prepareTable on CREATE TABLE; drop heap before catalog on DROP TABLE.

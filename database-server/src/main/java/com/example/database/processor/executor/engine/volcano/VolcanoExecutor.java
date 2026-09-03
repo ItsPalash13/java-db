@@ -7,16 +7,20 @@ import com.example.database.processor.executor.QueryExecutor;
 import com.example.database.processor.executor.QueryResult;
 import com.example.database.processor.executor.engine.volcano.operator.DeleteOperator;
 import com.example.database.processor.executor.engine.volcano.operator.Filter;
+import com.example.database.processor.executor.engine.volcano.operator.IndexScanOperator;
 import com.example.database.processor.executor.engine.volcano.operator.InsertOperator;
 import com.example.database.processor.executor.engine.volcano.operator.Project;
 import com.example.database.processor.executor.engine.volcano.operator.SeqScan;
 import com.example.database.processor.executor.engine.volcano.operator.UpdateOperator;
 import com.example.database.processor.executor.engine.volcano.operator.VolcanoOperator;
+import com.example.database.processor.planner.IndexScanSpec;
+import com.example.database.processor.planner.AccessPath;
 import com.example.database.processor.planner.DeletePlan;
 import com.example.database.processor.planner.ExecutionPlan;
 import com.example.database.processor.planner.InsertPlan;
 import com.example.database.processor.planner.SelectPlan;
 import com.example.database.processor.planner.UpdatePlan;
+import com.example.database.storage.index.IndexStore;
 import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.CatalogManager;
 import com.example.database.storage.lock.LockException;
@@ -41,17 +45,20 @@ import java.util.function.Supplier;
 public final class VolcanoExecutor implements QueryExecutor {
 
     private final TableStore tableStore;
+    private final IndexStore indexStore;
     private final LockManager lockManager;
     private final TransactionManager transactionManager;
     private final CatalogManager catalogManager;
 
     public VolcanoExecutor(
             TableStore tableStore,
+            IndexStore indexStore,
             LockManager lockManager,
             TransactionManager transactionManager,
             CatalogManager catalogManager
     ) {
         this.tableStore = Objects.requireNonNull(tableStore, "tableStore");
+        this.indexStore = Objects.requireNonNull(indexStore, "indexStore");
         this.lockManager = Objects.requireNonNull(lockManager, "lockManager");
         this.transactionManager = Objects.requireNonNull(transactionManager, "transactionManager");
         this.catalogManager = Objects.requireNonNull(catalogManager, "catalogManager");
@@ -76,10 +83,20 @@ public final class VolcanoExecutor implements QueryExecutor {
     }
 
     private QueryResult executeSelect(SelectPlan plan) {
+        // ENGINE IS before table IS so CHECKPOINT (ENGINE X) can quiesce readers.
+        lockManager.lockEngine(LockMode.IS);
         lockManager.lockTable(plan.database(), plan.table(), LockMode.IS);
         try {
             ExpressionEvaluator evaluator = evaluator(plan.columns());
-            VolcanoOperator root = new SeqScan(tableStore, lockManager, plan.database(), plan.table());
+            VolcanoOperator root = scanOperator(
+                    plan.database(),
+                    plan.table(),
+                    plan.columns(),
+                    plan.where(),
+                    plan.accessPath(),
+                    plan.indexScanSpec(),
+                    lockManager
+            );
             if (plan.where() != null) {
                 root = new Filter(root, plan.where(), evaluator);
             }
@@ -92,6 +109,8 @@ public final class VolcanoExecutor implements QueryExecutor {
     }
 
     private QueryResult executeInsert(InsertPlan plan) {
+        // ENGINE IX (not IS): unlockSharedForOwner must not drop it before COMMIT.
+        lockManager.lockEngine(LockMode.IX);
         lockManager.lockTable(plan.database(), plan.table(), LockMode.IX);
         try {
             VolcanoOperator root = new InsertOperator(
@@ -109,16 +128,18 @@ public final class VolcanoExecutor implements QueryExecutor {
     }
 
     private QueryResult executeUpdate(UpdatePlan plan) {
+        lockManager.lockEngine(LockMode.IX);
         lockManager.lockTable(plan.database(), plan.table(), LockMode.IX);
         try {
             ExpressionEvaluator evaluator = evaluator(plan.columns());
-            VolcanoOperator scan = WriteScanPrefilter.scan(
-                    tableStore,
+            VolcanoOperator scan = scanOperator(
                     plan.database(),
                     plan.table(),
-                    plan.where(),
                     plan.columns(),
-                    evaluator
+                    plan.where(),
+                    plan.accessPath(),
+                    plan.indexScanSpec(),
+                    null
             );
             VolcanoOperator root = new UpdateOperator(
                     scan,
@@ -139,16 +160,18 @@ public final class VolcanoExecutor implements QueryExecutor {
     }
 
     private QueryResult executeDelete(DeletePlan plan) {
+        lockManager.lockEngine(LockMode.IX);
         lockManager.lockTable(plan.database(), plan.table(), LockMode.IX);
         try {
             ExpressionEvaluator evaluator = evaluator(plan.columns());
-            VolcanoOperator scan = WriteScanPrefilter.scan(
-                    tableStore,
+            VolcanoOperator scan = scanOperator(
                     plan.database(),
                     plan.table(),
-                    plan.where(),
                     plan.columns(),
-                    evaluator
+                    plan.where(),
+                    plan.accessPath(),
+                    plan.indexScanSpec(),
+                    null
             );
             VolcanoOperator root = new DeleteOperator(
                     scan,
@@ -180,6 +203,31 @@ public final class VolcanoExecutor implements QueryExecutor {
             }
         }
         return transactionManager.runInTransaction(lockManager, tableStore, action);
+    }
+
+    private VolcanoOperator scanOperator(
+            String database,
+            String table,
+            List<ColumnMetadata> columns,
+            com.example.database.processor.parser.ast.Expression where,
+            AccessPath accessPath,
+            IndexScanSpec indexScanSpec,
+            LockManager rowLockManager
+    ) {
+        if (accessPath.kind() == AccessPath.Kind.INDEX_SCAN && indexScanSpec != null) {
+            return new IndexScanOperator(
+                    indexStore,
+                    tableStore,
+                    rowLockManager,
+                    database,
+                    table,
+                    indexScanSpec
+            );
+        }
+        if (rowLockManager != null) {
+            return new SeqScan(tableStore, rowLockManager, database, table);
+        }
+        return new SeqScan(tableStore, database, table);
     }
 
     /** READ COMMITTED releases S/IS at statement end; X/IX stay until COMMIT/ABORT. */

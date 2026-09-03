@@ -52,6 +52,12 @@ public interface BufferPool {
     BufferFrame newPage(String file);
 
     /**
+     * Append an empty page of {@code type} at the end of {@code file}.
+     * {@link PageType#HEAP} is also available via {@link #newPage(String)}.
+     */
+    BufferFrame newPage(String file, com.example.database.storage.page.PageType type);
+
+    /**
      * Decrement pin count. At 0 the frame may be chosen as a clock victim (if clean).
      * Missing unpin fills the pool with immortal pages and the next pin fails.
      */

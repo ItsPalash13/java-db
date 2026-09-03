@@ -1,18 +1,18 @@
 package com.example.database.storage.wal;
 
 import com.example.database.storage.catalog.CatalogManager;
+import com.example.database.storage.index.IndexStore;
+import com.example.database.storage.table.TableStore;
 
 /**
- * Write-ahead log: durable intent before catalog (and later page) changes.
- * Step 3: catalog DDL records only. Callers {@link #append} then {@link #flush}
- * before applying catalog; {@link #discardPending} on rollback of unflushed work;
- * {@link #replay} on storage start after {@code catalogManager.load()}.
+ * Write-ahead log: durable intent before catalog and heap/index mutations.
+ * Callers {@link #append} / {@link #appendReturningLsn} then {@link #flush}
+ * before relying on crash recovery; {@link #discardPending} on rollback of
+ * unflushed work; {@link #replay} then {@link #redoDml} on storage start.
  * <p>
- * {@link #checkpoint} is the durability-lifecycle companion to replay: it does not
- * flush dirty pages (none yet). It records that committed catalog state is on disk and
- * appends a CHECKPOINT fence to the append-only {@code wal.log} (never rewrites history).
- * Caller holds the exclusive catalog lock so checkpoint never runs in the
- * WAL-flush → catalog-persist gap.
+ * {@link #checkpoint} records the recovery fence in {@code wal.log}. Callers
+ * must flush the buffer pool (dirty pages) under ENGINE X <em>before</em>
+ * invoking checkpoint so page bytes on disk are covered by the fence.
  */
 public interface WALManager {
 
@@ -20,29 +20,45 @@ public interface WALManager {
     void append(WalRecord record);
 
     /**
+     * Assign a monotonic LSN, queue the record, and return that LSN for stamping
+     * on the heap page. LSN is a counter (not a byte offset); restart advances
+     * past the max {@code lsn} already present in {@code wal.log}.
+     */
+    long appendReturningLsn(WalRecord record);
+
+    /**
      * Write pending records to {@code wal.log} and force them to disk.
      * Makes intent durable so crash recovery can replay.
      */
     void flush();
 
+    /**
+     * Ensure every record with LSN ≤ {@code lsn} is on disk. Flushes this thread's
+     * pending stream when DML shares it with COMMIT (teaching simplification).
+     */
+    void flushUpTo(long lsn);
+
     /** Drop unflushed records for this thread (transaction rollback before flush). */
     void discardPending();
 
     /**
-     * Re-apply committed WAL records that are missing from the catalog (idempotent).
-     * Call after {@link CatalogManager#load()}. Applies only records after the last
-     * {@code CHECKPOINT} line; merges {@code wal.checkpoint} maxTxnId. Older lines remain
-     * on disk because the log is append-only.
+     * Re-apply committed <em>catalog</em> WAL records missing from the catalog.
+     * Skips DML ops (those are {@link #redoDml}). Call after {@code catalogManager.load()}.
      *
      * @return highest {@code txnId} seen in the log or checkpoint (0 if none)
      */
     int replay(CatalogManager catalogManager);
 
     /**
-     * Durable-only barrier: write {@code wal.checkpoint} with maxTxnId, then
-     * <strong>append</strong> a {@code CHECKPOINT} line to {@code wal.log} (never replace
-     * or empty the log). Safe only when catalog files already reflect every committed op
-     * through that high-water mark. Caller must hold exclusive catalog lock.
+     * Re-apply committed logical DML / index ops after the last CHECKPOINT fence.
+     * Idempotent. Does not redo uncommitted groups. Caller should suppress heap WAL
+     * logging and index side-effects while this runs.
+     */
+    void redoDml(TableStore tableStore, IndexStore indexStore);
+
+    /**
+     * Durable barrier: write {@code wal.checkpoint} with maxTxnId, then append a
+     * {@code CHECKPOINT} line. Caller must already have flushed WAL and dirty pages.
      *
      * @return maxTxnId stored in the checkpoint file
      */

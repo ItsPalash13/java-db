@@ -98,6 +98,26 @@ public final class HeapPage {
         return Short.toUnsignedInt(buf().getShort(PageLayout.OFF_UPPER));
     }
 
+    /**
+     * Highest WAL LSN that covers a mutation on this page (0 if never logged).
+     * Used by the buffer pool for WAL-before-data on {@code .ibd} flush.
+     */
+    public long pageLsn() {
+        return buf().getLong(PageLayout.OFF_LSN_RESERVED);
+    }
+
+    /** Stamp LSN after appending the covering WAL record; must not decrease. */
+    public void setPageLsn(long lsn) {
+        if (lsn < 0) {
+            throw new IllegalArgumentException("page LSN must be >= 0");
+        }
+        long current = pageLsn();
+        if (lsn < current) {
+            return;
+        }
+        buf().putLong(PageLayout.OFF_LSN_RESERVED, lsn);
+    }
+
     /** Bytes available in {@code [lower, upper)} for a new slot + payload. */
     public int freeSpace() {
         return upper() - lower();
@@ -139,6 +159,22 @@ public final class HeapPage {
         header.putShort(PageLayout.OFF_LOWER, (short) newLower);
         header.putShort(PageLayout.OFF_UPPER, (short) newUpper);
         return slotId;
+    }
+
+    /**
+     * Like {@link #read} but null-pads when the payload was written with fewer columns
+     * (after {@code ALTER TABLE ADD COLUMN} without rewriting heap rows).
+     */
+    public Optional<Tuple> readPadded(int slotId, ColumnType[] types) {
+        requireSlot(slotId);
+        int length = slotLength(slotId);
+        if (length == 0) {
+            return Optional.empty();
+        }
+        int offset = slotOffset(slotId);
+        byte[] payload = new byte[length];
+        System.arraycopy(data, offset, payload, 0, length);
+        return Optional.of(RowCodec.decodeWithNullPad(payload, types));
     }
 
     /**

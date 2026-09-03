@@ -88,6 +88,7 @@ class AnalyzedCreateTable <<concrete>> {
   -database: String
   -table: String
   -columns: List<ColumnMetadata>
+  -primaryKeyColumn: Optional<String>
 }
 
 class AnalyzedCreateDatabase <<concrete>> {
@@ -222,6 +223,7 @@ class CreateTablePlan <<concrete>> {
   -database: String
   -table: String
   -columns: List<ColumnMetadata>
+  -primaryKeyColumn: Optional<String>
 }
 
 class CreateDatabasePlan <<concrete>> {
@@ -473,6 +475,7 @@ class DefaultCatalogManager <<concrete>> {
   -databaseNames: Set<String>
   -catalogStore: CatalogStore
   -nextTableId: int
+  -stateLock: Object
   +getTable(database: String, table: String): Optional<TableMetadata>
   +tableExists(database: String, table: String): boolean
   +createTable(table: TableMetadata): TableMetadata
@@ -487,6 +490,7 @@ class DefaultCatalogManager <<concrete>> {
   +createDatabase(name: String)
   +dropDatabase(name: String)
   +load()
+    note right: restoreSnapshot synchronized;\nskip no-op restore
 }
 
 class TableMetadata <<concrete>> {
@@ -495,6 +499,7 @@ class TableMetadata <<concrete>> {
   -name: String
   -columns: List<ColumnMetadata>
   -indexes: List<IndexMetadata>
+  -primaryKeyColumn: Optional<String>
   +define(database: String, name: String, columns: List<ColumnMetadata>): TableMetadata
 }
 
@@ -546,6 +551,20 @@ interface TableStore {
   +delete(database: String, table: String, rowId: long)
   +dropTable(database: String, table: String)
   +dropDatabase(database: String)
+  +prepareTable(database: String, table: String)
+}
+
+class TableHeapFiles <<concrete>> {
+  +{static} ibdPath(database: String, table: String): String
+}
+
+class FileTableStore <<concrete>> {
+  -catalogManager: CatalogManager
+  -bufferPool: BufferPool
+  -physicalStorage: PhysicalStorage
+  +insert / scan / update / delete / findByRowId / restoreRow
+  +prepareTable / dropTable / dropDatabase / setSuppressSideEffects
+    note right: restoreRow skips IndexMaintainer\nwhen suppressSideEffects (redo)
 }
 
 class InMemoryTableStore <<concrete>> {
@@ -607,10 +626,14 @@ interface LockManager {
   +unlockExclusiveCatalog()
   +bindOwner(ownerId: long)
   +clearOwnerBinding()
+  +lockEngine(mode: LockMode)
+  +unlockEngine(mode: LockMode)
+  +runWithEngineX(action)
   +runWithTable(db, table, LockMode, action)
   +runWithDatabase(db, LockMode, action)
   +lockTable / unlockTable / lockRow / unlockRow
   +unlockAllForOwner()
+  +unlockSharedForOwner()
 }
 
 enum LockMode {
@@ -621,6 +644,7 @@ enum LockMode {
 }
 
 enum LockLevel {
+  ENGINE
   CATALOG
   DATABASE
   TABLE
@@ -628,6 +652,7 @@ enum LockLevel {
 }
 
 class LockKey <<record>> {
+  +engine(): LockKey
   +catalog(): LockKey
   +database(name): LockKey
   +table(db, table): LockKey
@@ -646,6 +671,7 @@ class DefaultLockManager <<concrete>> {
   -heldByOwner: Map<Long, List<HeldLock>>
   -lockWait: Duration
   +runExclusiveCatalog(...)
+  +lockEngine / runWithEngineX
   +runWithTable(...)
   +runWithDatabase(...)
   +lockTable / lockRow / unlockAllForOwner
@@ -679,7 +705,7 @@ class DefaultTransactionManager <<concrete>> {
   +beginExplicit()
   +commitExplicit()
   +rollbackExplicit()
-    note right: READ COMMITTED;\nDML undo via UndoManager
+    note right: READ COMMITTED;\nDML undo via UndoManager;\nrollbackExplicit always unlocks;\ndrops .idx created after BEGIN
 }
 
 interface UndoManager {
@@ -833,6 +859,8 @@ enum TokenCatalog {
   UPDATE
   INSERT
   DELETE
+  PRIMARY
+  KEY
   INT
   VARCHAR
   BOOLEAN_TYPE
@@ -904,6 +932,7 @@ enum ColumnSqlType {
 class ColumnDefinition <<concrete>> {
   -name: String
   -type: ColumnSqlType
+  -primaryKey: boolean
 }
 
 class QualifiedTable <<concrete>> {
@@ -915,6 +944,7 @@ class QualifiedTable <<concrete>> {
 class CreateTableQuery <<concrete>> {
   -table: QualifiedTable
   -columns: List<ColumnDefinition>
+  -primaryKeyColumn: Optional<String>
 }
 
 interface Expression
@@ -1133,15 +1163,19 @@ CommandExecutor --> CatalogManager : writes
 CommandExecutor --> TableStore : dropTable / dropDatabase
 DescribeExecutor --> CatalogManager : reads
 CommandExecutor --> TransactionManager : implicit txn / explicit append
-CommandExecutor --> LockManager : table X / database X / catalog X
+CommandExecutor --> LockManager : ENGINE IX + table X / database X / catalog X
 CommandExecutor --> WALManager : append (flush at commit)
 VolcanoExecutor --> TableStore : DML/DQL
-VolcanoExecutor --> LockManager : table IS/IX + row S/X
+VolcanoExecutor --> LockManager : ENGINE IS/IX + table IS/IX + row S/X
 VolcanoExecutor --> TransactionManager : implicit txn per statement
 VolcanoExecutor ..> VolcanoOperator : compiles plan
 VolcanoOperator ..> Tuple
 ExpressionEvaluator ..> Tuple
+TableStore <|.. FileTableStore
 TableStore <|.. InMemoryTableStore
+FileTableStore --> BufferPool
+FileTableStore --> CatalogManager
+FileTableStore --> RidMap
 InMemoryTableStore --> Tuple
 RidMap <|.. InMemoryRidMap
 InMemoryRidMap --> Rid
@@ -1153,7 +1187,10 @@ RowCodec ..> ColumnType
 RowCodec ..> Tuple
 HeapPage ..> PageLayoutException : throws
 TransactionControlExecutor --> TransactionManager : begin/commit/rollback
-CheckpointExecutor --> LockManager : runExclusiveCatalog
+CheckpointExecutor --> LockManager : runWithEngineX + catalog
+CheckpointExecutor --> BufferPool : flushAll
+CheckpointExecutor --> WALManager : flush + checkpoint
+CheckpointScheduler --> BufferPool : flushAll
 CheckpointExecutor --> WALManager : checkpoint
 CheckpointExecutor --> TransactionManager : reject if explicit
 TransactionManager <|.. DefaultTransactionManager
@@ -1191,7 +1228,9 @@ CommandExecutor ..> DropColumnPlan
 CommandExecutor ..> CreateIndexPlan
 CommandExecutor ..> DropIndexPlan
 StorageEngine --> TableStore : owns
-DefaultStorageEngine --> InMemoryTableStore : constructs
+DefaultStorageEngine --> FileIndexStore : constructs
+DefaultStorageEngine --> IndexMaintainer : constructs
+FileTableStore --> IndexMaintainer : optional
 StorageEngine --> IndexStore : owns
 StorageEngine --> BufferPool : owns
 DefaultStorageEngine --> DefaultBufferPool : constructs

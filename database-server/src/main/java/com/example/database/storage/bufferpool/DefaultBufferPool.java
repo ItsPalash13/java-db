@@ -1,8 +1,14 @@
 package com.example.database.storage.bufferpool;
 
+import com.example.database.storage.index.EmptyPageFactory;
 import com.example.database.storage.page.HeapPage;
+import com.example.database.storage.page.PageLayout;
+import com.example.database.storage.page.PageType;
 import com.example.database.storage.physical.PhysicalStorage;
+import com.example.database.storage.wal.WALManager;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -13,16 +19,11 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 /**
  * Fixed-size frame table with clock (second-chance) replacement over {@link PhysicalStorage}.
  * <p>
- * Phase 3 policy: <b>do not evict dirty frames</b> (global no-steal until DML WAL).
- * Dirty pages leave RAM only via {@link #flush} / {@link #flushAll} (checkpoint /
- * {@code StorageEngine.stop}). Evicting a dirty page without a durable log would make a
- * crash show heap bytes with no WAL record — recovery could not undo/redo correctly.
+ * Phase 3/6 policy: <b>do not evict dirty frames</b> (global no-steal). Dirty pages leave
+ * RAM via {@link #flush} / {@link #flushAll}. Before writing an {@code .ibd} frame,
+ * {@link WALManager#flushUpTo} forces the covering WAL LSN (WAL-before-data).
  * <p>
  * Latches are per-frame read/write locks and are <em>not</em> {@code LockManager} locks.
- * Acquire order: pin, then latch; never hold a latch until COMMIT.
- * Constructed by {@code DefaultStorageEngine}; Volcano must not call pin.
- *
- * @see BufferPool for the pin → latch → mutate → unpin protocol and examples
  */
 public final class DefaultBufferPool implements BufferPool {
 
@@ -37,6 +38,8 @@ public final class DefaultBufferPool implements BufferPool {
     private final Object tableLock = new Object();
     private final Map<PageId, Integer> pageToFrame = new HashMap<>();
     private int clockHand;
+    private PageFlushHook pageFlushHook;
+    private WALManager walManager;
 
     /** Builds a pool with {@link #DEFAULT_FRAME_COUNT} frames using {@code storage.pageSize()}. */
     public DefaultBufferPool(PhysicalStorage storage) {
@@ -60,6 +63,39 @@ public final class DefaultBufferPool implements BufferPool {
             // fair=false: short critical sections; latch waits that look like lock waits are bugs.
             latches[i] = new ReentrantReadWriteLock();
         }
+    }
+
+    /** Optional hook for index page WAL-before-data (I8). */
+    public void setPageFlushHook(PageFlushHook hook) {
+        this.pageFlushHook = hook;
+    }
+
+    /**
+     * WAL gate for heap pages: {@link #writeFrameToDisk} calls {@link WALManager#flushUpTo}
+     * before writing {@code .ibd} bytes. Index pages use {@link PageFlushHook} only.
+     */
+    public void setWalManager(WALManager walManager) {
+        this.walManager = walManager;
+    }
+
+    /** Write one dirty frame; WAL-before-data for heap, IndexPageWal hook for {@code .idx}. */
+    private void writeFrameToDisk(BufferFrame frame) {
+        PageId id = frame.pageId();
+        // Heap: force WAL through page LSN before data bytes hit disk (no-force COMMIT safe).
+        if (walManager != null && id.file().endsWith(".ibd")) {
+            long pageLsn = ByteBuffer.wrap(frame.data())
+                    .order(ByteOrder.BIG_ENDIAN)
+                    .getLong(PageLayout.OFF_LSN_RESERVED);
+            if (pageLsn > 0) {
+                walManager.flushUpTo(pageLsn);
+            }
+        }
+        if (pageFlushHook != null) {
+            pageFlushHook.beforePageFlush(id, frame.data());
+        }
+        long offset = (long) id.pageId() * pageSize;
+        storage.write(id.file(), offset, frame.data());
+        frame.clearDirty();
     }
 
     @Override
@@ -86,10 +122,14 @@ public final class DefaultBufferPool implements BufferPool {
 
     @Override
     public BufferFrame newPage(String file) {
+        return newPage(file, PageType.HEAP);
+    }
+
+    @Override
+    public BufferFrame newPage(String file, PageType type) {
         Objects.requireNonNull(file, "file");
+        Objects.requireNonNull(type, "type");
         synchronized (tableLock) {
-            // Reserve a clean frame before growing the file — otherwise a failed
-            // allocate would leave an orphan page on disk with no frame.
             int victim = findCleanVictim();
             BufferFrame frame = frames[victim];
 
@@ -104,15 +144,12 @@ public final class DefaultBufferPool implements BufferPool {
             }
             int pageIdNum = (int) (length / pageSize);
             PageId pageId = new PageId(file, pageIdNum);
-            // Empty HEAP image so a later FileTableStore can wrap without a second format.
-            // Index newPage will use a different PageType once IndexStore exists.
-            byte[] empty = HeapPage.createEmpty(pageIdNum, pageSize).toBytes();
+            byte[] empty = EmptyPageFactory.emptyPage(pageIdNum, pageSize, type);
             storage.write(file, length, empty);
 
             evictIfOccupied(frame);
             frame.assign(pageId, empty);
             frame.incrementPin();
-            // Append already wrote the header to disk; caller marks dirty on first mutation.
             pageToFrame.put(pageId, victim);
             return frame;
         }
@@ -218,15 +255,6 @@ public final class DefaultBufferPool implements BufferPool {
     /** Page size copied from {@link PhysicalStorage#pageSize()} at construction. */
     public int pageSize() {
         return pageSize;
-    }
-
-    /** Write one dirty frame; Phase 6 will flush WAL up to this page's LSN first. */
-    private void writeFrameToDisk(BufferFrame frame) {
-        PageId id = frame.pageId();
-        long offset = (long) id.pageId() * pageSize;
-        // DML WAL-before-data (Phase 6) would flush the log up to this page's LSN first.
-        storage.write(id.file(), offset, frame.data());
-        frame.clearDirty();
     }
 
     /**

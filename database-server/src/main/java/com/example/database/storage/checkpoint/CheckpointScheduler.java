@@ -1,5 +1,6 @@
 package com.example.database.storage.checkpoint;
 
+import com.example.database.storage.bufferpool.BufferPool;
 import com.example.database.storage.lock.LockManager;
 import com.example.database.storage.transaction.TransactionManager;
 import com.example.database.storage.wal.WALManager;
@@ -8,12 +9,8 @@ import java.util.Objects;
 
 /**
  * Background loop owned by {@code StorageEngine}: wait on a plugged
- * {@link CheckpointStrategy}, then run the shared durable-only
- * {@link WALManager#checkpoint()} under the exclusive catalog lock.
- * <p>
- * Keeps timing policy out of {@code DefaultWALManager} (I/O only) and out of
- * SQL executors (request path). Manual {@code CHECKPOINT} bypasses this loop and
- * calls the same {@code checkpoint()} from {@code CheckpointExecutor}.
+ * {@link CheckpointStrategy}, then under ENGINE X flush WAL, dirty pages, and
+ * the durable-only {@link WALManager#checkpoint()} fence.
  */
 public final class CheckpointScheduler {
 
@@ -21,6 +18,7 @@ public final class CheckpointScheduler {
     private final LockManager lockManager;
     private final WALManager walManager;
     private final TransactionManager transactionManager;
+    private final BufferPool bufferPool;
     private final Object monitor = new Object();
     private Thread worker;
     private volatile boolean running;
@@ -29,12 +27,14 @@ public final class CheckpointScheduler {
             CheckpointStrategy strategy,
             LockManager lockManager,
             WALManager walManager,
-            TransactionManager transactionManager
+            TransactionManager transactionManager,
+            BufferPool bufferPool
     ) {
         this.strategy = Objects.requireNonNull(strategy, "strategy");
         this.lockManager = Objects.requireNonNull(lockManager, "lockManager");
         this.walManager = Objects.requireNonNull(walManager, "walManager");
         this.transactionManager = Objects.requireNonNull(transactionManager, "transactionManager");
+        this.bufferPool = Objects.requireNonNull(bufferPool, "bufferPool");
     }
 
     public void start() {
@@ -60,7 +60,6 @@ public final class CheckpointScheduler {
             toJoin = worker;
             worker = null;
             if (toJoin != null) {
-                // Wakes Thread.sleep / poll sleep in the plugged strategy.
                 toJoin.interrupt();
             }
         }
@@ -80,18 +79,18 @@ public final class CheckpointScheduler {
                 if (!running) {
                     return;
                 }
-                // Skip while any connection has an open BEGIN — deferred catalog / WAL must
-                // not be truncated before those sessions COMMIT or ROLLBACK.
                 if (transactionManager.activeExplicitSessionCount() > 0) {
                     continue;
                 }
-                lockManager.runExclusiveCatalog(walManager::checkpoint);
+                lockManager.runWithEngineX(() -> lockManager.runExclusiveCatalog(() -> {
+                    walManager.flush();
+                    bufferPool.flushAll();
+                    walManager.checkpoint();
+                }));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
             } catch (RuntimeException e) {
-                // Swallow and retry on the next trigger — a single I/O blip should not
-                // kill the daemon for the life of the process.
                 System.err.println("[CheckpointScheduler] checkpoint failed: " + e.getMessage());
             }
         }

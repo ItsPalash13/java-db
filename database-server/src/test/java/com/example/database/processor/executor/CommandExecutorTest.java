@@ -22,6 +22,7 @@ import com.example.database.storage.physical.DefaultPhysicalStorage;
 import com.example.database.storage.transaction.DefaultTransactionManager;
 import com.example.database.storage.undo.DefaultUndoManager;
 import com.example.database.storage.wal.DefaultWALManager;
+import com.example.database.storage.index.NoopIndexStore;
 import com.example.database.storage.wal.WALManager;
 import com.example.database.storage.DataDirectory;
 import org.junit.jupiter.api.Test;
@@ -168,7 +169,7 @@ class CommandExecutorTest {
 
         assertEquals(
                 "OK",
-                executor.execute(new CreateIndexPlan("shop", "users", "idx_users_id", List.of(1))).toResponse()
+                executor.execute(new CreateIndexPlan("shop", "users", "idx_users_id", List.of(1), false)).toResponse()
         );
         TableMetadata users = catalog.getTable("shop", "users").orElseThrow();
         assertEquals(1, users.indexes().size());
@@ -222,7 +223,8 @@ class CommandExecutorTest {
                 new DefaultTransactionManager(wal, new DefaultUndoManager()),
                 new DefaultLockManager(),
                 wal,
-                new com.example.database.storage.table.InMemoryTableStore()
+                new com.example.database.storage.table.InMemoryTableStore(),
+                new NoopIndexStore()
         );
     }
 }

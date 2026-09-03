@@ -75,8 +75,18 @@ class DefaultTransactionManagerTest {
         }
 
         @Override
+        public long appendReturningLsn(WalRecord record) {
+            return 1L;
+        }
+
+        @Override
         public void flush() {
             flushCount++;
+        }
+
+        @Override
+        public void flushUpTo(long lsn) {
+            flush();
         }
 
         @Override
@@ -87,6 +97,13 @@ class DefaultTransactionManagerTest {
         @Override
         public int replay(CatalogManager catalogManager) {
             return 0;
+        }
+
+        @Override
+        public void redoDml(
+                com.example.database.storage.table.TableStore tableStore,
+                com.example.database.storage.index.IndexStore indexStore
+        ) {
         }
 
         @Override

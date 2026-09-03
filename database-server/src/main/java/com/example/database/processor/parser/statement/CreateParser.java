@@ -42,6 +42,7 @@ public final class CreateParser implements Parser {
             return new CreateTableQuery(table, columns);
         }
 
+        boolean unique = stream.match(TokenCatalog.UNIQUE);
         if (stream.match(TokenCatalog.INDEX)) {
             String index = stream.expect(TokenCatalog.IDENTIFIER).lexeme();
             stream.expect(TokenCatalog.ON);
@@ -49,7 +50,7 @@ public final class CreateParser implements Parser {
             stream.expect(TokenCatalog.LPAREN);
             List<String> columns = parseIndexColumnList(stream);
             stream.expect(TokenCatalog.RPAREN);
-            return new CreateIndexQuery(index, table, columns);
+            return new CreateIndexQuery(index, table, columns, unique);
         }
 
         Token bad = stream.peek();
@@ -71,7 +72,13 @@ public final class CreateParser implements Parser {
     private static ColumnDefinition parseColumnDefinition(TokenStream stream) {
         String name = stream.expect(TokenCatalog.IDENTIFIER).lexeme();
         ColumnSqlType type = ColumnTypeParser.parse(stream);
-        return new ColumnDefinition(name, type);
+        // PRIMARY KEY constraint after column type: CREATE TABLE t (id INT PRIMARY KEY, ...)
+        boolean pk = false;
+        if (stream.match(TokenCatalog.PRIMARY)) {
+            stream.expect(TokenCatalog.KEY);
+            pk = true;
+        }
+        return new ColumnDefinition(name, type, pk);
     }
 
     private static List<String> parseIndexColumnList(TokenStream stream) {

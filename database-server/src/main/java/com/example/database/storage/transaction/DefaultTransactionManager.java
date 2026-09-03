@@ -5,10 +5,15 @@ import com.example.database.storage.catalog.CatalogSnapshot;
 import com.example.database.storage.lock.LockManager;
 import com.example.database.storage.table.TableStore;
 import com.example.database.storage.undo.UndoManager;
+import com.example.database.storage.catalog.IndexMetadata;
+import com.example.database.storage.catalog.TableMetadata;
+import com.example.database.storage.index.IndexStore;
 import com.example.database.storage.wal.WALManager;
 import com.example.database.storage.wal.WalRecord;
 
+import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
@@ -18,19 +23,26 @@ import java.util.function.Supplier;
  * <p>
  * DML rollback uses {@link UndoManager}; explicit sessions snapshot catalog only at
  * {@code BEGIN} and take the catalog lock only on {@link #commitExplicit}.
+ * {@link #rollbackExplicit} also drops {@code .idx}/{@code .ibd} created after {@code BEGIN}.
  */
 public final class DefaultTransactionManager implements TransactionManager {
 
     private final WALManager walManager;
     private final UndoManager undoManager;
+    private final IndexStore indexStore;
     private final AtomicInteger nextTxnId = new AtomicInteger(1);
     private final AtomicInteger activeExplicitSessions = new AtomicInteger(0);
     private final ThreadLocal<TransactionContext> context = ThreadLocal.withInitial(TransactionContext::new);
     private final ThreadLocal<Integer> implicitDepth = ThreadLocal.withInitial(() -> 0);
 
     public DefaultTransactionManager(WALManager walManager, UndoManager undoManager) {
+        this(walManager, undoManager, null);
+    }
+
+    public DefaultTransactionManager(WALManager walManager, UndoManager undoManager, IndexStore indexStore) {
         this.walManager = Objects.requireNonNull(walManager, "walManager");
         this.undoManager = Objects.requireNonNull(undoManager, "undoManager");
+        this.indexStore = indexStore;
     }
 
     @Override
@@ -175,17 +187,29 @@ public final class DefaultTransactionManager implements TransactionManager {
             throw new IllegalStateException("no explicit transaction to rollback");
         }
         int txnId = session.txnId();
-        catalogManager.setDeferPersist(false);
-        catalogManager.restoreSnapshot(session.catalogSnapshot());
-        undoManager.rollback(txnId, tableStore);
-        walManager.discardPending();
-        lockManager.bindOwner(txnId);
+        CatalogSnapshot begun = session.catalogSnapshot();
+        // Always clear session + locks even if undo throws — otherwise other connections
+        // wait forever on ENGINE/table locks held by this aborted explicit txn.
         try {
-            lockManager.unlockAllForOwner();
+            CatalogSnapshot dirty = catalogManager.snapshot();
+            // Catalog snapshot restore does not unlink .idx / .ibd created after BEGIN.
+            dropPhysicalCreatedAfter(begun, dirty, catalogManager, tableStore);
+            catalogManager.setDeferPersist(false);
+            catalogManager.restoreSnapshot(begun);
+            // Rewrite catalog.json if a later statement persisted uncommitted DDL (e.g. failed
+            // CREATE INDEX after catalog write).
+            catalogManager.persistChangesSince(dirty);
+            undoManager.rollback(txnId, tableStore);
+            walManager.discardPending();
         } finally {
-            lockManager.clearOwnerBinding();
-            session.clear();
-            activeExplicitSessions.decrementAndGet();
+            lockManager.bindOwner(txnId);
+            try {
+                lockManager.unlockAllForOwner();
+            } finally {
+                lockManager.clearOwnerBinding();
+                session.clear();
+                activeExplicitSessions.decrementAndGet();
+            }
         }
     }
 
@@ -266,5 +290,49 @@ public final class DefaultTransactionManager implements TransactionManager {
         if (lockManager != null) {
             lockManager.unlockAllForOwner();
         }
+    }
+
+    /**
+     * Unlink .idx / .ibd created after {@code BEGIN}. Catalog memory is still the dirty
+     * snapshot when this runs; {@link CatalogManager#restoreSnapshot} follows.
+     */
+    private void dropPhysicalCreatedAfter(
+            CatalogSnapshot begun,
+            CatalogSnapshot dirty,
+            CatalogManager catalogManager,
+            TableStore tableStore
+    ) {
+        Objects.requireNonNull(catalogManager, "catalogManager");
+        for (TableMetadata now : dirty.allTables()) {
+            TableMetadata then = findTable(begun, now.database(), now.name());
+            if (then == null) {
+                if (indexStore != null) {
+                    indexStore.dropTableIndexes(now.database(), now.name(), now.indexes());
+                }
+                tableStore.dropTable(now.database(), now.name());
+                continue;
+            }
+            if (indexStore == null) {
+                continue;
+            }
+            Set<String> oldNames = new HashSet<>();
+            for (IndexMetadata index : then.indexes()) {
+                oldNames.add(index.name());
+            }
+            for (IndexMetadata index : now.indexes()) {
+                if (!oldNames.contains(index.name())) {
+                    indexStore.dropIndex(now.database(), now.name(), index.name());
+                }
+            }
+        }
+    }
+
+    private static TableMetadata findTable(CatalogSnapshot snapshot, String database, String table) {
+        for (TableMetadata existing : snapshot.allTables()) {
+            if (existing.database().equals(database) && existing.name().equals(table)) {
+                return existing;
+            }
+        }
+        return null;
     }
 }

@@ -34,7 +34,8 @@ public final class DefaultQueryPlanner implements QueryPlanner {
     public ExecutionPlan plan(AnalyzedQuery analyzed) {
         Objects.requireNonNull(analyzed, "analyzed");
         if (analyzed instanceof AnalyzedCreateTable createTable) {
-            return new CreateTablePlan(createTable.database(), createTable.table(), createTable.columns());
+            return new CreateTablePlan(createTable.database(), createTable.table(),
+                    createTable.columns(), createTable.primaryKeyColumn());
         }
         if (analyzed instanceof AnalyzedDropTable dropTable) {
             return new DropTablePlan(dropTable.database(), dropTable.table());
@@ -56,7 +57,8 @@ public final class DefaultQueryPlanner implements QueryPlanner {
                     createIndex.database(),
                     createIndex.table(),
                     createIndex.index(),
-                    createIndex.columnIds()
+                    createIndex.columnIds(),
+                    createIndex.unique()
             );
         }
         if (analyzed instanceof AnalyzedDropIndex dropIndex) {
@@ -84,47 +86,50 @@ public final class DefaultQueryPlanner implements QueryPlanner {
             return new ShowTablesPlan(showTables.database());
         }
         if (analyzed instanceof AnalyzedSelect select) {
+            AccessPathChoice path = AccessPathChooser.choose(
+                    select.where().orElse(null),
+                    select.columns(),
+                    select.indexes()
+            );
             return new SelectPlan(
                     select.database(),
                     select.table(),
                     select.projections(),
                     select.where().orElse(null),
                     select.columns(),
-                    AccessPathChooser.choose(
-                            select.where().orElse(null),
-                            select.columns(),
-                            select.indexes()
-                    )
+                    path
             );
         }
         if (analyzed instanceof AnalyzedInsert insert) {
             return new InsertPlan(insert.database(), insert.table(), insert.values());
         }
         if (analyzed instanceof AnalyzedUpdate update) {
+            AccessPathChoice path = AccessPathChooser.choose(
+                    update.where().orElse(null),
+                    update.columns(),
+                    update.indexes()
+            );
             return new UpdatePlan(
                     update.database(),
                     update.table(),
                     update.assignments(),
                     update.where().orElse(null),
                     update.columns(),
-                    AccessPathChooser.choose(
-                            update.where().orElse(null),
-                            update.columns(),
-                            update.indexes()
-                    )
+                    path
             );
         }
         if (analyzed instanceof AnalyzedDelete delete) {
+            AccessPathChoice path = AccessPathChooser.choose(
+                    delete.where().orElse(null),
+                    delete.columns(),
+                    delete.indexes()
+            );
             return new DeletePlan(
                     delete.database(),
                     delete.table(),
                     delete.where().orElse(null),
                     delete.columns(),
-                    AccessPathChooser.choose(
-                            delete.where().orElse(null),
-                            delete.columns(),
-                            delete.indexes()
-                    )
+                    path
             );
         }
         if (analyzed instanceof UnresolvedQuery unresolved) {

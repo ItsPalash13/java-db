@@ -8,6 +8,7 @@ import java.util.Map;
 /**
  * Parses only the wire JSON schema (not general JSON). Hand-rolled so the client module
  * needs no extra dependencies; shapes must stay aligned with server {@code WireResponseJson}.
+ * SQL NULL is JSON {@code null} in RESULT_SET cells; those values are kept (not {@code List.copyOf}).
  */
 public final class WireResponseJson {
 
@@ -84,9 +85,21 @@ public final class WireResponseJson {
                 if (!(rowItem instanceof List<?> rawCells)) {
                     throw new WireParseException("RESULT_SET row must be an array");
                 }
-                rows.add(List.copyOf(rawCells));
+                rows.add(copyCellsAllowingNull(rawCells));
             }
             return new WireMessage.ResultSet(columns, rows);
+        }
+
+        /**
+         * {@link List#copyOf} rejects null cells. Server RESULT_SET encodes SQL NULL as JSON
+         * {@code null} (omitted INSERT columns, ADD COLUMN padding).
+         */
+        private static List<Object> copyCellsAllowingNull(List<?> rawCells) {
+            List<Object> cells = new ArrayList<>(rawCells.size());
+            for (Object cell : rawCells) {
+                cells.add(cell);
+            }
+            return cells;
         }
 
         private Map<String, Object> expectObject(String kind) {

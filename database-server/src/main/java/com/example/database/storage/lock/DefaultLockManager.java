@@ -19,16 +19,17 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
 /**
- * Central lock manager for catalog exclusivity and scoped SQL locks (database / table / row).
+ * Central lock manager for catalog exclusivity, ENGINE quiesce, and scoped SQL locks
+ * (database / table / row).
  * <p>
  * Two separate synchronization domains:
  * <ul>
- *   <li>{@link #catalogLock} — one global exclusive lock for catalog file I/O (CHECKPOINT, CREATE DATABASE).</li>
+ *   <li>{@link #catalogLock} — one global exclusive lock for catalog file I/O (schema persist).</li>
  *   <li>{@link #stateMutex} + {@link #states} — the in-memory <em>lock table</em>: one {@link LockState}
- *       per {@link LockKey}. This mutex is a latch on the manager's map only; it is <em>not</em> a SQL table lock.</li>
+ *       per {@link LockKey} including {@link LockLevel#ENGINE}. This mutex is a latch on the manager's
+ *       map only; it is <em>not</em> a SQL table lock.</li>
  * </ul>
- * Hierarchy (db intention → table → row) is enforced by acquire order in public methods, not by nesting
- * map entries. Each {@link LockKey} is an independent entry in {@link #states}.
+ * Hierarchy (engine → db intention → table → row) is enforced by acquire order in public methods.
  */
 public final class DefaultLockManager implements LockManager {
 
@@ -131,6 +132,40 @@ public final class DefaultLockManager implements LockManager {
     @Override
     public void unlockExclusiveCatalog() {
         catalogLock.unlock();
+    }
+
+    // --- Engine lock (CHECKPOINT X vs DML/DQL/DDL IS/IX) ---------------------
+
+    @Override
+    public void lockEngine(LockMode mode) {
+        validateEngineMode(mode);
+        acquire(LockKey.engine(), mode, currentOwner());
+    }
+
+    @Override
+    public void unlockEngine(LockMode mode) {
+        validateEngineMode(mode);
+        release(LockKey.engine(), mode, currentOwner());
+    }
+
+    @Override
+    public void runWithEngineX(Runnable action) {
+        runWithEngineX(() -> {
+            action.run();
+            return null;
+        });
+    }
+
+    @Override
+    public <T> T runWithEngineX(Supplier<T> action) {
+        Objects.requireNonNull(action, "action");
+        long owner = currentOwner();
+        acquire(LockKey.engine(), LockMode.X, owner);
+        try {
+            return action.get();
+        } finally {
+            release(LockKey.engine(), LockMode.X, owner);
+        }
     }
 
     // --- Scoped locks: table / database (with hierarchy) --------------------
@@ -286,6 +321,12 @@ public final class DefaultLockManager implements LockManager {
             return bound;
         }
         return Thread.currentThread().getId();
+    }
+
+    private static void validateEngineMode(LockMode mode) {
+        if (mode != LockMode.IS && mode != LockMode.IX && mode != LockMode.X) {
+            throw new IllegalArgumentException("lockEngine expects IS, IX, or X, got " + mode);
+        }
     }
 
     private static void validateTableMode(LockMode tableMode) {

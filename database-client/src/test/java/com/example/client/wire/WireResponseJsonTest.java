@@ -34,4 +34,18 @@ class WireResponseJsonTest {
         assertEquals(List.of(1L, "a"), resultSet.rows().get(0));
         assertEquals(new WireMessage.Done(1), response.messages().get(1));
     }
+
+    @Test
+    void parsesResultSetWithSqlNullCell() {
+        String json = "{\"v\":1,\"messages\":["
+                + "{\"type\":\"RESULT_SET\",\"columns\":["
+                + "{\"name\":\"id\",\"type\":\"INT\"},{\"name\":\"active\",\"type\":\"BOOLEAN\"}"
+                + "],\"rows\":[[3,null]]},"
+                + "{\"type\":\"DONE\",\"rowsAffected\":1}"
+                + "]}";
+        WireResponse response = WireResponseJson.parse(json);
+        WireMessage.ResultSet resultSet = (WireMessage.ResultSet) response.messages().get(0);
+        assertEquals(3L, resultSet.rows().get(0).get(0));
+        assertEquals(null, resultSet.rows().get(0).get(1));
+    }
 }

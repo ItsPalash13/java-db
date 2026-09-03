@@ -93,18 +93,22 @@ class DefaultQueryProcessorTest {
     }
 
     @Test
-    void executeSelectEmptyAfterRestartDocumentsTemporaryStore() {
+    void executeSelectSurvivesRestartViaDmlWal() {
         DefaultQueryProcessor first = newProcessor();
         assertEquals("OK", first.executeText("CREATE DATABASE shop"));
         assertEquals("OK", first.executeText("CREATE TABLE shop.users (id INT, name VARCHAR)"));
         assertEquals("OK", first.executeText("INSERT INTO shop.users VALUES (1, 'Ada')"));
+        first.storageEngine().stop();
 
         StorageEngine restarted = new DefaultStorageEngine(new DataDirectory(dataDir));
         restarted.start();
-        DefaultQueryProcessor second = new DefaultQueryProcessor(restarted);
-        assertTrue(second.storageEngine().catalogManager().tableExists("shop", "users"));
-        // InMemoryTableStore is not durable — catalog survives; rows do not.
-        assertEquals(List.of(), resultSetRows(second.execute("SELECT * FROM shop.users")));
+        try {
+            DefaultQueryProcessor second = new DefaultQueryProcessor(restarted);
+            assertTrue(second.storageEngine().catalogManager().tableExists("shop", "users"));
+            assertEquals(List.of(List.of(1, "Ada")), resultSetRows(second.execute("SELECT * FROM shop.users")));
+        } finally {
+            restarted.stop();
+        }
     }
 
     @Test

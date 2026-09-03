@@ -1,6 +1,7 @@
 package com.example.database.storage.table;
 
 import com.example.database.processor.executor.engine.volcano.Tuple;
+import com.example.database.storage.page.Rid;
 
 import java.util.Iterator;
 import java.util.Optional;
@@ -36,6 +37,14 @@ public interface TableStore {
     /** Drops every heap under {@code database}. Called after DROP DATABASE. */
     void dropDatabase(String database);
 
+    /**
+     * Prepares on-disk heap storage when a table is created. File-backed stores create an
+     * empty {@code .ibd}; in-memory stores ignore this.
+     */
+    default void prepareTable(String database, String table) {
+        // no-op for InMemoryTableStore
+    }
+
     /** Captures all heap rows for rollback of an explicit transaction. */
     TableSnapshot snapshot();
 
@@ -44,6 +53,22 @@ public interface TableStore {
 
     /** Returns one row by id for undo capture before UPDATE/DELETE. */
     Optional<Tuple> findByRowId(String database, String table, long rowId);
+
+    /**
+     * Returns the heap address for a logical row id. Used by index maintenance and index scans.
+     * File-backed stores resolve through RidMap; in-memory stores return empty.
+     */
+    default Optional<Rid> findRid(String database, String table, long rowId) {
+        return Optional.empty();
+    }
+
+    /**
+     * Reads a live row at a heap address without going through RidMap.
+     * File-backed stores pin/latch the page; in-memory stores return empty.
+     */
+    default Optional<Tuple> findByRid(String database, String table, Rid rid) {
+        return Optional.empty();
+    }
 
     /**
      * Re-inserts a row with a fixed {@code rowId} during undo of DELETE.

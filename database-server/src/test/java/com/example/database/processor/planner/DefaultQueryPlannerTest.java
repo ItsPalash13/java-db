@@ -111,7 +111,7 @@ class DefaultQueryPlannerTest {
     void plansCreateAndDropIndex() {
         CreateIndexPlan create = assertInstanceOf(
                 CreateIndexPlan.class,
-                planner.plan(new AnalyzedCreateIndex("shop", "users", "idx_users_id", List.of(1)))
+                planner.plan(new AnalyzedCreateIndex("shop", "users", "idx_users_id", List.of(1), false))
         );
         assertEquals(QueryType.CREATE_INDEX, create.queryType());
         assertEquals(List.of(1), create.columnIds());
@@ -164,6 +164,29 @@ class DefaultQueryPlannerTest {
 
         SelectPlan plan = assertInstanceOf(SelectPlan.class, planner.plan(analyzed));
         assertEquals(AccessPath.indexScan("idx_users_id"), plan.accessPath());
+        assertEquals("idx_users_id", plan.indexScanSpec().indexName());
+    }
+
+    @Test
+    void plansSelectAsIndexScanForRangeOnLeadingColumn() {
+        ColumnMetadata id = new ColumnMetadata(1, "id", ColumnType.INT, true);
+        BinaryExpression where = new BinaryExpression(
+                new ColumnExpression("id"),
+                TokenCatalog.GT,
+                new LiteralExpression(900L)
+        );
+        AnalyzedSelect analyzed = new AnalyzedSelect(
+                "shop",
+                "users",
+                List.of(ResolvedProjection.column(id)),
+                where,
+                List.of(id),
+                List.of(IndexMetadata.define("idx_users_id", List.of(1)))
+        );
+
+        SelectPlan plan = assertInstanceOf(SelectPlan.class, planner.plan(analyzed));
+        assertEquals(AccessPath.indexScan("idx_users_id"), plan.accessPath());
+        assertEquals(false, plan.indexScanSpec().equality());
     }
 
     @Test

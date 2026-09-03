@@ -6,7 +6,10 @@ package com.example.database.storage.page;
  * byte tells the codec which layout to expect inside.
  */
 public enum PageType {
-    HEAP((byte) 1);
+    HEAP((byte) 1),
+    INDEX_META((byte) 2),
+    INDEX_LEAF((byte) 3),
+    INDEX_INTERNAL((byte) 4);
 
     private final byte code;
 
