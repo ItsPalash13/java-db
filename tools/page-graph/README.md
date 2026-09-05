@@ -2,7 +2,7 @@
 
 Offline Python tool that reads JavaDatabase page files and writes an **interactive HTML** graph.
 
-- **Left:** B+ tree from a `.idx` (META → INTERNAL → LEAF) plus HEAP nodes for pages referenced by leaf Rids.
+- **Left:** B+ tree from a `.idx` — internal root fans out to leaf children (solid arrows); dashed `nextLeaf` edges link sibling leaves left→right on the same row. HEAP nodes stay off the canvas until you click an entry.
 - **Right:** Click a **LEAF**, then an **entry row**, to open that heap page and highlight the Rid slot / row.
 
 Disk image only — run `CHECKPOINT` or stop the server first if you need a consistent dump.
@@ -44,4 +44,4 @@ Matches the Java codecs:
 | Leaf entry | key bytes + Rid `(pageId:i32, slotId:i32)` |
 | Internal entry | separator key + child `pageId:i32` |
 
-Key and row types come from `catalog.json` (index `columnIds` → key; all table columns → heap decode).
+Key and row types come from `catalog.json`. The HTML canvas shows the **B+ tree only**; click a leaf entry to open the heap row in the side panel (one Rid edge is drawn for that entry).
