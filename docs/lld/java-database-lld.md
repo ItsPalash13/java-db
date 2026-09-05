@@ -986,6 +986,8 @@ classDiagram
         +checkpointEnabled() boolean
         +checkpointStrategyKind() CheckpointStrategyKind
         +pageSize() int
+        +indexKeyPaddingBytes() int
+        +bufferPoolFrames() int
         +createCheckpointStrategy(PhysicalStorage) CheckpointStrategy
     }
 

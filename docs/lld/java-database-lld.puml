@@ -849,6 +849,8 @@ class ServerEnvironment <<concrete>> {
   +checkpointEnabled(): boolean
   +checkpointStrategyKind(): CheckpointStrategyKind
   +pageSize(): int
+  +indexKeyPaddingBytes(): int
+  +bufferPoolFrames(): int
   +createCheckpointStrategy(physicalStorage: PhysicalStorage): CheckpointStrategy
 }
 

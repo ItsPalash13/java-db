@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
-# Wipe test/data, load 1000 rows (8 KiB pages), CHECKPOINT, write page-graph HTML.
-# Usage (from repo root, Git Bash / WSL / macOS / Linux):
+# Wipe test/data, load 1000 rows, CHECKPOINT, write multi-index page-graph HTML.
+#
+# Why PAGE_SIZE=8192 + INDEX_KEY_PADDING_BYTES=256?
+#   Fat keys fill leaves/internals quickly → height 3 with only 1k inserts (good for UI).
+#   Compare/search still use the logical key; pad is trailing zeros stripped on decode.
+#
+# Why mid-load CHECKPOINT inside load_1k.txt (every 100 inserts)?
+#   No-steal buffer pool cannot evict dirty pages. Padding creates many dirty .idx pages
+#   (two indexes). CHECKPOINT -> flushAll() frees frames so the load can finish.
+#
+# Usage (repo root, Git Bash / WSL / macOS / Linux):
 #   bash scripts/run_1k_page_graph.sh
+# Env overrides: DATA_DIR PORT PAGE_SIZE INDEX_KEY_PADDING_BYTES BUFFER_POOL_FRAMES TABLE_DIR OUT_HTML
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,6 +20,10 @@ cd "$ROOT"
 DATA_DIR="${DATA_DIR:-test/data}"
 PORT="${PORT:-9090}"
 PAGE_SIZE="${PAGE_SIZE:-8192}"
+# 256 ≈ height 3 at 1k rows on 8 KiB pages; set 0 for "normal" skinny keys.
+INDEX_KEY_PADDING_BYTES="${INDEX_KEY_PADDING_BYTES:-256}"
+# Default 128 matches DefaultBufferPool; mid-load CHECKPOINT is the real no-steal fix.
+BUFFER_POOL_FRAMES="${BUFFER_POOL_FRAMES:-128}"
 HOST="${HOST:-127.0.0.1}"
 SCRIPT="${SCRIPT:-input/cmds/load_1k.txt}"
 OUT_HTML="${OUT_HTML:-out/page-graph/users.html}"
@@ -67,6 +81,8 @@ CHECKPOINT_STRATEGY=timeout
 CHECKPOINT_TIMEOUT_SECONDS=300
 MAX_WAL_SIZE_BYTES=16777216
 PAGE_SIZE=${PAGE_SIZE}
+INDEX_KEY_PADDING_BYTES=${INDEX_KEY_PADDING_BYTES}
+BUFFER_POOL_FRAMES=${BUFFER_POOL_FRAMES}
 EOF
 
 printf 'CHECKPOINT\n' > "${TRANSCRIPT_DIR}/.checkpoint.txt"
@@ -80,11 +96,11 @@ mvn -pl database-server exec:java \
 SERVER_PID=$!
 wait_for_port "${HOST}" "${PORT}"
 
-echo "==> load 1k (${SCRIPT})"
+echo "==> load 1k (${SCRIPT}) — mid-load CHECKPOINT every 100 inserts (no-steal pool)"
 mvn -pl database-client exec:java \
   "-Dexec.args=--script ${SCRIPT} --out ${TRANSCRIPT_DIR}/load_1k.run.txt ${HOST} ${PORT}"
 
-echo "==> CHECKPOINT (flush dirty pages to disk for page-graph)"
+echo "==> final CHECKPOINT (durable .idx/.ibd for page-graph)"
 mvn -pl database-client exec:java \
   "-Dexec.args=--script ${TRANSCRIPT_DIR}/.checkpoint.txt --out ${TRANSCRIPT_DIR}/checkpoint.run.txt ${HOST} ${PORT}"
 

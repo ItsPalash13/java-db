@@ -17,8 +17,13 @@ public final class IndexPageLayout {
      * Lives just past the 24-byte shared header (root/height use the LSN-reserved region).
      */
     public static final int OFF_META_PAGE_SIZE = PageLayout.HEADER_SIZE;
-    /** Bytes after the shared header occupied by the pageSize stamp. */
-    public static final int META_PAGE_SIZE_BYTES = Integer.BYTES;
+    /**
+     * Meta page 0: durable {@code INDEX_KEY_PADDING_BYTES} (trailing zeros after logical key).
+     * Must match server env so decode/compare strip the same pad.
+     */
+    public static final int OFF_META_KEY_PADDING = OFF_META_PAGE_SIZE + Integer.BYTES;
+    /** Bytes after the shared header occupied by pageSize + keyPadding stamps. */
+    public static final int META_PAGE_SIZE_BYTES = Integer.BYTES + Integer.BYTES;
 
     /** Leaf page: next sibling leaf page id (-1 = none). */
     public static final int OFF_LEAF_NEXT = PageLayout.OFF_LSN_RESERVED;

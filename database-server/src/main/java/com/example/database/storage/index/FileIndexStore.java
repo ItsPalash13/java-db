@@ -23,19 +23,40 @@ import java.util.function.Consumer;
 /**
  * On-disk B+ tree index store: one {@code .idx} file per catalog index.
  * Page 0 is {@link IndexMetaPage}; tree nodes start at page 1.
+ * <p>
+ * {@code keyPaddingBytes} (from {@code INDEX_KEY_PADDING_BYTES}) is stamped on meta and
+ * applied by {@link IndexKeyCodec}. It does not change search/insert order — only how
+ * many keys fit per page. Fat keys + no-steal buffer pool need mid-load {@code CHECKPOINT}
+ * (see {@code input/cmds/load_1k.txt}) or the pool fills with dirty frames.
  */
 public final class FileIndexStore implements IndexStore {
 
     private final BufferPool bufferPool;
     private final PhysicalStorage physicalStorage;
     private final int pageSize;
+    /** Same value stamped on INDEX_META; must match codec for decode to strip pad. */
+    private final int keyPaddingBytes;
     private final Map<String, ColumnType[]> keyTypesByIndex = new ConcurrentHashMap<>();
     private final Map<String, Boolean> uniqueByIndex = new ConcurrentHashMap<>();
 
     public FileIndexStore(BufferPool bufferPool, PhysicalStorage physicalStorage) {
+        this(bufferPool, physicalStorage, 0);
+    }
+
+    /**
+     * @param keyPaddingBytes trailing zeros after each encoded key ({@code INDEX_KEY_PADDING_BYTES});
+     *                        does not change compare order — only entry size / tree height
+     */
+    public FileIndexStore(BufferPool bufferPool, PhysicalStorage physicalStorage, int keyPaddingBytes) {
         this.bufferPool = Objects.requireNonNull(bufferPool, "bufferPool");
         this.physicalStorage = Objects.requireNonNull(physicalStorage, "physicalStorage");
         this.pageSize = physicalStorage.pageSize();
+        if (keyPaddingBytes < 0 || keyPaddingBytes > 0x8000) {
+            throw new IllegalArgumentException("keyPaddingBytes out of range: " + keyPaddingBytes);
+        }
+        this.keyPaddingBytes = keyPaddingBytes;
+        // Process-wide so leaf/internal page codecs and IndexBuilder see the same pad.
+        IndexKeyCodec.setKeyPaddingBytes(keyPaddingBytes);
     }
 
     @Override
@@ -58,6 +79,8 @@ public final class FileIndexStore implements IndexStore {
                 IndexMetaPage meta = IndexMetaPage.wrap(metaFrame.data());
                 meta.setRoot(-1, 0);
                 meta.setPageSize(pageSize);
+                // Persist pad so reopen / page-graph decode strip the same trailing zeros.
+                meta.setKeyPaddingBytes(keyPaddingBytes);
                 bufferPool.markDirty(metaFrame);
             } finally {
                 bufferPool.unlatch(metaFrame);
@@ -1135,6 +1158,14 @@ public final class FileIndexStore implements IndexStore {
                 throw new IndexStoreException(
                         "index file " + file + " stamped PAGE_SIZE " + stamped
                                 + " does not match server PAGE_SIZE " + pageSize
+                );
+            }
+            int stampedPad = meta.keyPaddingBytes();
+            // Pad mismatch would decode trailing zeros as "extra bytes" or skip real key data.
+            if (stampedPad != keyPaddingBytes) {
+                throw new IndexStoreException(
+                        "index file " + file + " stamped INDEX_KEY_PADDING_BYTES " + stampedPad
+                                + " does not match server INDEX_KEY_PADDING_BYTES " + keyPaddingBytes
                 );
             }
             return new MetaView(meta.rootPageId(), meta.height());

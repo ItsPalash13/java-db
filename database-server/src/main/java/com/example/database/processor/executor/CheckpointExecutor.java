@@ -14,6 +14,8 @@ import java.util.Objects;
  * <p>
  * Under ENGINE X: flush WAL → {@link BufferPool#flushAll()} (WAL-before-data per dirty
  * frame) → exclusive catalog + {@link WALManager#checkpoint()} fence.
+ * {@code flushAll} also clears dirty bits so no-steal clock eviction can reuse frames —
+ * important when fat index keys ({@code INDEX_KEY_PADDING_BYTES}) create many dirty pages.
  * Refuses inside an explicit transaction or while any other connection has an open
  * {@code BEGIN}.
  */

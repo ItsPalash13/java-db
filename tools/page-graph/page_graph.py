@@ -34,6 +34,7 @@ OFF_LSN_RESERVED = 16
 OFF_META_ROOT = OFF_LSN_RESERVED
 OFF_META_HEIGHT = OFF_LSN_RESERVED + 4
 OFF_META_PAGE_SIZE = HEADER_SIZE  # 24
+OFF_META_KEY_PADDING = HEADER_SIZE + 4  # 28
 OFF_HEAP_META_PAGE_SIZE = OFF_LSN_RESERVED
 OFF_LEAF_NEXT = OFF_LSN_RESERVED
 OFF_INTERNAL_LEFT = OFF_LSN_RESERVED
@@ -189,8 +190,31 @@ def decode_typed_payload(payload: bytes, types: list[str], *, skip_row_id: bool)
     return out
 
 
-def decode_key(payload: bytes, types: list[str]) -> list[Any]:
-    return decode_typed_payload(payload, types, skip_row_id=False)["values"]
+def decode_key(payload: bytes, types: list[str], key_padding: int = 0) -> list[Any]:
+    """Decode index key; ignore trailing teaching pad (INDEX_KEY_PADDING_BYTES)."""
+    pos = 0
+    nb = null_bitmap_bytes(len(types))
+    if len(payload) - pos < nb:
+        raise PageError("truncated before null bitmap")
+    bitmap = payload[pos : pos + nb]
+    pos += nb
+    values: list[Any] = []
+    for i, col_type in enumerate(types):
+        is_null = (bitmap[i // 8] & (1 << (i % 8))) != 0
+        if is_null:
+            values.append(None)
+        else:
+            val, pos = get_typed(memoryview(payload), pos, col_type)
+            values.append(val)
+    remaining = len(payload) - pos
+    if remaining == key_padding:
+        return values
+    if remaining == 0 and key_padding == 0:
+        return values
+    # Older images / unknown pad: accept trailing zeros as pad.
+    if remaining > 0 and all(b == 0 for b in payload[pos:]):
+        return values
+    raise PageError(f"index key trailing bytes: {remaining} (expected pad {key_padding})")
 
 
 def decode_row(payload: bytes, types: list[str]) -> dict[str, Any]:
@@ -270,6 +294,7 @@ def parse_index_file(pages: list[bytes], key_types: list[str]) -> dict[str, Any]
     edges: list[dict[str, Any]] = []
     leaves: dict[str, Any] = {}
     meta_info: dict[str, Any] = {}
+    key_padding = 0
 
     for page_num, page in enumerate(pages):
         hdr = header_fields(page)
@@ -285,13 +310,21 @@ def parse_index_file(pages: list[bytes], key_types: list[str]) -> dict[str, Any]
             root = i32(page, OFF_META_ROOT)
             height = i32(page, OFF_META_HEIGHT)
             stamped = i32(page, OFF_META_PAGE_SIZE)
-            meta_info = {"rootPageId": root, "height": height, "pageSize": stamped}
+            key_padding = i32(page, OFF_META_KEY_PADDING)
+            if key_padding < 0:
+                key_padding = 0
+            meta_info = {
+                "rootPageId": root,
+                "height": height,
+                "pageSize": stamped,
+                "keyPaddingBytes": key_padding,
+            }
             nodes.append(
                 {
                     "id": node_id,
                     "pageId": page_num,
                     "kind": "META",
-                    "label": f"META p{page_num}\nroot={root} h={height}\npageSize={stamped}",
+                    "label": f"META p{page_num}\nroot={root} h={height}\npageSize={stamped}\npad={key_padding}",
                     "title": f"INDEX_META page {page_num}",
                     "free": free,
                 }
@@ -340,7 +373,7 @@ def parse_index_file(pages: list[bytes], key_types: list[str]) -> dict[str, Any]
                 key_bytes = page[off : off + length - CHILD_BYTES]
                 child = i32(page, off + length - CHILD_BYTES)
                 try:
-                    key_vals = decode_key(key_bytes, key_types)
+                    key_vals = decode_key(key_bytes, key_types, key_padding)
                     key_disp = format_values(key_vals)
                 except PageError:
                     key_disp = f"<{len(key_bytes)}B>"
@@ -369,7 +402,7 @@ def parse_index_file(pages: list[bytes], key_types: list[str]) -> dict[str, Any]
                 rid_page = i32(page, off + length - RID_BYTES)
                 rid_slot = i32(page, off + length - RID_BYTES + 4)
                 try:
-                    key_vals = decode_key(key_bytes, key_types)
+                    key_vals = decode_key(key_bytes, key_types, key_padding)
                     key_disp = format_values(key_vals)
                 except PageError:
                     key_vals = None

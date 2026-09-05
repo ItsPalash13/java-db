@@ -27,8 +27,11 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public final class DefaultBufferPool implements BufferPool {
 
-    /** Default number of RAM frames when the engine does not override (tests may use 2). */
-    public static final int DEFAULT_FRAME_COUNT = 64;
+    /** Default RAM frames. Kept modest: fat keys ({@code INDEX_KEY_PADDING_BYTES}) create
+     * many dirty .idx pages under no-steal. {@code load_1k.txt} issues CHECKPOINT every 100
+     * inserts so {@link #flushAll} clears dirty bits. 128 leaves headroom for two indexes
+     * (pk + secondary) between checkpoints — not a substitute for those CHECKPOINTs. */
+    public static final int DEFAULT_FRAME_COUNT = 128;
 
     private final PhysicalStorage storage;
     private final int pageSize;
@@ -306,6 +309,8 @@ public final class DefaultBufferPool implements BufferPool {
             return index;
         }
         throw new BufferPoolException(
+                // Typical cause with INDEX_KEY_PADDING_BYTES: too many dirty .idx pages.
+                // Fix: CHECKPOINT (flushAll) during the load — see input/cmds/load_1k.txt.
                 "buffer pool exhausted: no clean unpinned frame (flush dirty pages or unpin)");
     }
 

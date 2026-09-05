@@ -652,9 +652,11 @@ page 0 of .ibd — durable PAGE_SIZE stamp (same pageSize as data pages)
 
 <<concrete>>
 IndexMetaPage
-page 0 of .idx — root, height, PAGE_SIZE stamp
+page 0 of .idx — root, height, PAGE_SIZE + INDEX_KEY_PADDING_BYTES stamps
 + createEmpty(pageId, pageSize): IndexMetaPage
 + wrap(data: byte[]): IndexMetaPage
++ pageSize() / keyPaddingBytes() / setPageSize / setKeyPaddingBytes
++ setRoot(rootPageId, height)
 + rootPageId() / height() / pageSize(): int
 + setRoot(rootPageId, height): void
 + setPageSize(pageSize: int): void
@@ -746,9 +748,10 @@ IndexPageWal
 
 <<concrete>>
 FileIndexStore implements IndexStore
-- bufferPool, physicalStorage, keyTypesByIndex, uniqueByIndex
+- bufferPool, physicalStorage, keyTypesByIndex, uniqueByIndex, keyPaddingBytes
     // leaf split stitches nextLeaf (left→right→oldNext); rewriteLeaf preserves nextLeaf
     // leaf borrow/merge uses same-parent siblings only (not nextLeaf neighbors)
+    // INDEX_KEY_PADDING_BYTES via IndexKeyCodec (stamp on INDEX_META; compare strips pad)
     // page 0 INDEX_META; bulkLoadSorted; delete merge/borrow for leaf + internal (rebalanceInternalAfterDelete cascade); unique enforcement
 
 
@@ -1098,16 +1101,23 @@ LaunchConfig
 ServerEnvironment
 + ENV_FILE_NAME: String
 + CATALOG_LOCK_WAIT_SECONDS / CHECKPOINT_ENABLED / CHECKPOINT_STRATEGY
-+ CHECKPOINT_TIMEOUT_SECONDS / MAX_WAL_SIZE_BYTES / PAGE_SIZE
++ CHECKPOINT_TIMEOUT_SECONDS / MAX_WAL_SIZE_BYTES / PAGE_SIZE / INDEX_KEY_PADDING_BYTES / BUFFER_POOL_FRAMES
 + DEFAULT_PAGE_SIZE = 16 KiB
++ DEFAULT_INDEX_KEY_PADDING_BYTES = 0
++ DEFAULT_BUFFER_POOL_FRAMES = 128   // DefaultBufferPool.DEFAULT_FRAME_COUNT
 + defaults(): ServerEnvironment   // checkpointEnabled=false (tests)
 + load(dataDirectory: DataDirectory): ServerEnvironment
++ pageSize() / indexKeyPaddingBytes() / bufferPoolFrames()
+    // INDEX_KEY_PADDING_BYTES fattens on-disk index keys (trailing zeros); compare/decode strip pad
+    // BUFFER_POOL_FRAMES is RAM-only (not stamped on disk); wired into DefaultBufferPool
 + catalogLockWait(): Duration
 + checkpointEnabled(): boolean
 + checkpointStrategyKind(): CheckpointStrategyKind
 + checkpointTimeout(): Duration
 + maxWalSizeBytes(): long
 + pageSize(): int                 // wired into DefaultPhysicalStorage
++ indexKeyPaddingBytes(): int     // wired into FileIndexStore / IndexKeyCodec
++ bufferPoolFrames(): int         // wired into DefaultBufferPool (RAM-only)
 + createCheckpointStrategy(physicalStorage: PhysicalStorage): CheckpointStrategy
     // plugs timeout OR wal_size — one strategy for the scheduler
 
@@ -1430,7 +1440,7 @@ database-client is a separate Maven module: DatabaseClient REPL over the same le
 
 Catalog (Phase 1.1–1.3):
 CatalogManager is a StorageEngine submodule and owns CatalogStore.
-DefaultStorageEngine constructs PhysicalStorage(pageSize from ServerEnvironment), DefaultCatalogManager, DefaultWALManager, FileIndexStore, DefaultUndoManager(indexStore), DefaultTransactionManager(wal, undo), DefaultLockManager (DETECT_RESOLVE), CheckpointScheduler (strategy from ServerEnvironment + BufferPool), DefaultBufferPool (WAL flush gate + IndexPageWal hook), IndexMaintainer (logical INDEX_* WAL), and UndoableTableStore over FileTableStore (logical row WAL + page LSN). start() runs PageFileValidator on all .ibd/.idx, then loads catalog, catalog replay, DML redo, IndexPageWal.replay, loads index key types, seeds next txnId, starts scheduler if enabled. stop() flushes dirty buffer-pool pages then stops the scheduler.
+DefaultStorageEngine constructs PhysicalStorage(pageSize from ServerEnvironment), DefaultCatalogManager, DefaultWALManager, FileIndexStore(keyPadding from ServerEnvironment), DefaultUndoManager(indexStore), DefaultTransactionManager(wal, undo), DefaultLockManager (DETECT_RESOLVE), CheckpointScheduler (strategy from ServerEnvironment + BufferPool), DefaultBufferPool(frameCount from ServerEnvironment; WAL flush gate + IndexPageWal hook), IndexMaintainer (logical INDEX_* WAL), and UndoableTableStore over FileTableStore (logical row WAL + page LSN). start() runs PageFileValidator on all .ibd/.idx, then loads catalog, catalog replay, DML redo, IndexPageWal.replay, loads index key types, seeds next txnId, starts scheduler if enabled. stop() flushes dirty buffer-pool pages then stops the scheduler.
 start() calls catalogManager.load() — the engine does not touch catalog files.
 createTable assigns ids and writes data/<db>/<table>/catalog.json. Restart: new engine, start, getTable("shop","users").
 CREATE DATABASE creates data/<name>/; DROP DATABASE removes an empty directory (fails if tables remain). load() lists those directories and per-table catalogs.

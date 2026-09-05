@@ -64,13 +64,14 @@ public final class DefaultStorageEngine implements StorageEngine {
         this.physicalStorage = new DefaultPhysicalStorage(dataDirectory, environment.pageSize());
         this.catalogManager = new DefaultCatalogManager(physicalStorage);
         this.walManager = new DefaultWALManager(physicalStorage);
-        this.bufferPool = new DefaultBufferPool(physicalStorage);
+        // Frame count from server.env — not on-disk; raise for fat-key demos under no-steal.
+        this.bufferPool = new DefaultBufferPool(physicalStorage, environment.bufferPoolFrames());
         IndexPageWal indexPageWal = new IndexPageWal(physicalStorage);
         if (bufferPool instanceof DefaultBufferPool defaultBufferPool) {
             defaultBufferPool.setPageFlushHook(indexPageWal::logPageWrite);
             defaultBufferPool.setWalManager(walManager);
         }
-        this.indexStore = new FileIndexStore(bufferPool, physicalStorage);
+        this.indexStore = new FileIndexStore(bufferPool, physicalStorage, environment.indexKeyPaddingBytes());
         UndoManager undoManager = new DefaultUndoManager(indexStore);
         this.transactionManager = new DefaultTransactionManager(walManager, undoManager, indexStore);
         this.lockManager = new DefaultLockManager(environment.catalogLockWait());

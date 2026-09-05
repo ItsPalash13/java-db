@@ -122,7 +122,7 @@ Same-table DDL mixed with uncommitted writers is a **lock convoy** (table **X** 
 
 - **TCP** — one accept thread; each connection runs queries sequentially.
 - **Disconnect** — rolls back an open explicit transaction on that connection.
-- **Config** — `server.env` / environment for data dir, checkpoint strategy, lock wait, WAL size.
+- **Config** — `server.env` / environment for data dir, checkpoint strategy, lock wait, WAL size, `PAGE_SIZE`, `INDEX_KEY_PADDING_BYTES`, `BUFFER_POOL_FRAMES`.
 
 ### Mixed-workload stress
 

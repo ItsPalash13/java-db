@@ -9,7 +9,8 @@ import java.nio.ByteOrder;
 import java.util.Objects;
 
 /**
- * Page 0 of every {@code .idx} file: durable root pointer, tree height, and {@code PAGE_SIZE}.
+ * Page 0 of every {@code .idx} file: durable root pointer, tree height,
+ * {@code PAGE_SIZE}, and {@code INDEX_KEY_PADDING_BYTES}.
  * Not a B+ tree node — data pages start at page 1.
  */
 public final class IndexMetaPage {
@@ -31,7 +32,7 @@ public final class IndexMetaPage {
         buf.put(PageLayout.OFF_FLAGS, (byte) 0);
         buf.putInt(PageLayout.OFF_PAGE_ID, pageId);
         buf.putShort(PageLayout.OFF_SLOT_COUNT, (short) 0);
-        // lower past the pageSize stamp (root/height live in the LSN-reserved header region).
+        // lower past pageSize + keyPadding stamps (root/height live in LSN-reserved region).
         int lower = PageLayout.HEADER_SIZE + IndexPageLayout.META_PAGE_SIZE_BYTES;
         buf.putShort(PageLayout.OFF_LOWER, (short) lower);
         buf.putShort(PageLayout.OFF_UPPER, (short) pageSize);
@@ -39,6 +40,7 @@ public final class IndexMetaPage {
         buf.putInt(IndexPageLayout.OFF_META_ROOT, -1);
         buf.putInt(IndexPageLayout.OFF_META_HEIGHT, 0);
         buf.putInt(IndexPageLayout.OFF_META_PAGE_SIZE, pageSize);
+        buf.putInt(IndexPageLayout.OFF_META_KEY_PADDING, 0);
         return new IndexMetaPage(bytes);
     }
 
@@ -70,6 +72,11 @@ public final class IndexMetaPage {
         return buf().getInt(IndexPageLayout.OFF_META_PAGE_SIZE);
     }
 
+    /** Trailing key pad stamped at create time (must match {@code INDEX_KEY_PADDING_BYTES}). */
+    public int keyPaddingBytes() {
+        return buf().getInt(IndexPageLayout.OFF_META_KEY_PADDING);
+    }
+
     public void setRoot(int rootPageId, int height) {
         ByteBuffer header = buf();
         header.putInt(IndexPageLayout.OFF_META_ROOT, rootPageId);
@@ -81,6 +88,13 @@ public final class IndexMetaPage {
             throw new PageLayoutException("invalid stamped pageSize: " + pageSize);
         }
         buf().putInt(IndexPageLayout.OFF_META_PAGE_SIZE, pageSize);
+    }
+
+    public void setKeyPaddingBytes(int paddingBytes) {
+        if (paddingBytes < 0 || paddingBytes > 0x8000) {
+            throw new PageLayoutException("invalid stamped key padding: " + paddingBytes);
+        }
+        buf().putInt(IndexPageLayout.OFF_META_KEY_PADDING, paddingBytes);
     }
 
     private void validateHeader() {

@@ -6,15 +6,43 @@ import com.example.database.storage.page.PageLayoutException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Objects;
 
 /**
  * Order-preserving composite index key bytes for B+ tree separators and leaf lookups.
  * Null columns sort before non-null; typed encoding matches heap column rules.
+ * <p>
+ * Optional trailing zero padding ({@link #setKeyPaddingBytes(int)}) fattens on-disk
+ * entries so pages fill sooner (taller trees in demos) without changing compare order
+ * or decoded SQL values — search/insert still use the logical key only.
  */
 public final class IndexKeyCodec {
 
+    /** Process-wide pad length; set from {@code INDEX_KEY_PADDING_BYTES} / FileIndexStore. */
+    private static volatile int keyPaddingBytes = 0;
+
     private IndexKeyCodec() {
+    }
+
+    /**
+     * Trailing zero bytes appended after every encoded key (leaf + internal separators).
+     * {@code 0} = production default. Changing this on a non-empty data dir requires
+     * matching stamps on {@code .idx} meta pages (or recreating indexes).
+     */
+    public static void setKeyPaddingBytes(int paddingBytes) {
+        if (paddingBytes < 0) {
+            throw new IllegalArgumentException("index key padding must be >= 0, got " + paddingBytes);
+        }
+        if (paddingBytes > 0x8000) {
+            throw new IllegalArgumentException("index key padding too large: " + paddingBytes);
+        }
+        keyPaddingBytes = paddingBytes;
+    }
+
+    /** Current trailing pad length used by {@link #encode} / stripped by {@link #decode}. */
+    public static int keyPaddingBytes() {
+        return keyPaddingBytes;
     }
 
     public static int encodedLength(Object[] values, ColumnType[] types) {
@@ -26,6 +54,8 @@ public final class IndexKeyCodec {
             }
             length += typedByteLength(types[i], values[i]);
         }
+        // Teaching knob: pad is part of on-disk entry size (fewer keys/page → taller tree).
+        length += keyPaddingBytes;
         if (length > 0xFFFF) {
             throw new PageLayoutException("index key too large for u16: " + length);
         }
@@ -48,6 +78,8 @@ public final class IndexKeyCodec {
             }
             putTyped(buf, types[i], values[i]);
         }
+        // ByteBuffer.allocate zero-fills the remainder — that IS the INDEX_KEY_PADDING_BYTES.
+        // Compare/decode never look at those zeros; only slotted-page capacity cares.
         return buf.array();
     }
 
@@ -69,13 +101,17 @@ public final class IndexKeyCodec {
                 values[i] = getTyped(buf, types[i]);
             }
         }
-        if (buf.hasRemaining()) {
+        int pad = keyPaddingBytes;
+        if (buf.remaining() == pad) {
+            // Skip teaching pad so SQL sees the same values as with pad=0.
+            buf.position(buf.limit());
+        } else if (buf.hasRemaining()) {
             throw new PageLayoutException("index key has " + buf.remaining() + " trailing bytes");
         }
         return values;
     }
 
-    /** Compare encoded keys for B+ tree ordering. */
+    /** Compare encoded keys for B+ tree ordering (logical columns only; pad ignored via decode). */
     public static int compare(byte[] left, byte[] right, ColumnType[] types) {
         Object[] leftValues = decode(left, types);
         Object[] rightValues = decode(right, types);
@@ -96,7 +132,8 @@ public final class IndexKeyCodec {
             throw new PageLayoutException("prefixColumns exceeds key width: " + prefixColumns);
         }
         Object[] leftValues = decode(left, types);
-        Object[] rightValues = decode(right, types);
+        ColumnType[] prefixTypes = Arrays.copyOf(types, prefixColumns);
+        Object[] rightValues = decode(right, prefixTypes);
         for (int i = 0; i < prefixColumns; i++) {
             int cmp = compareTyped(leftValues[i], rightValues[i], types[i]);
             if (cmp != 0) {
@@ -106,13 +143,13 @@ public final class IndexKeyCodec {
         return 0;
     }
 
-    /** Encode only the first {@code prefixColumns} key components. */
+    /** Encode only the first {@code prefixColumns} key components (still applies key padding). */
     public static byte[] encodePrefix(Object[] values, ColumnType[] types, int prefixColumns) {
         if (prefixColumns > types.length) {
             throw new PageLayoutException("prefixColumns exceeds key width: " + prefixColumns);
         }
-        Object[] prefixValues = java.util.Arrays.copyOf(values, prefixColumns);
-        ColumnType[] prefixTypes = java.util.Arrays.copyOf(types, prefixColumns);
+        Object[] prefixValues = Arrays.copyOf(values, prefixColumns);
+        ColumnType[] prefixTypes = Arrays.copyOf(types, prefixColumns);
         return encode(prefixValues, prefixTypes);
     }
 

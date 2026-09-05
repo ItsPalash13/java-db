@@ -42,6 +42,9 @@ From the repo root (Git Bash / WSL / macOS / Linux):
 bash scripts/run_1k_page_graph.sh
 ```
 
-Wipes `test/data`, starts the server there with `PAGE_SIZE=8192`, runs `input/cmds/load_1k.txt`
-(PK on `id` + secondary `idx_users_name`), `CHECKPOINT`, then writes `out/page-graph/users.html`
-(tabs for every `.idx`). Override with env vars: `DATA_DIR`, `PORT`, `PAGE_SIZE`, `TABLE_DIR`, `OUT_HTML`.
+Wipes `test/data`, starts the server with `PAGE_SIZE=8192` and
+`INDEX_KEY_PADDING_BYTES=256` (taller B+ trees with 1k rows), runs `input/cmds/load_1k.txt`
+(PK + `idx_users_name`, **CHECKPOINT every 100 inserts** so the no-steal buffer pool
+can reuse frames), a final `CHECKPOINT`, then `out/page-graph/users.html`.
+Override: `DATA_DIR`, `PORT`, `PAGE_SIZE`, `INDEX_KEY_PADDING_BYTES`, `BUFFER_POOL_FRAMES`,
+`TABLE_DIR`, `OUT_HTML`.

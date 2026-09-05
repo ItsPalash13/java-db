@@ -1,6 +1,7 @@
 package com.example.database.config;
 
 import com.example.database.storage.DataDirectory;
+import com.example.database.storage.bufferpool.DefaultBufferPool;
 import com.example.database.storage.checkpoint.CheckpointStrategy;
 import com.example.database.storage.checkpoint.CheckpointStrategyKind;
 import com.example.database.storage.checkpoint.TimeoutCheckpointStrategy;
@@ -45,6 +46,22 @@ public final class ServerEnvironment {
      * used when those files were written — wrong values fail startup validation.
      */
     public static final String PAGE_SIZE = "PAGE_SIZE";
+    /**
+     * Trailing zero bytes after every on-disk index key (leaf + separator).
+     * Does not change SQL key order — only fattens entries so B+ trees grow taller
+     * with fewer rows (demos / page-graph). Default {@code 0}.
+     * <p>
+     * Side effect: more dirty index pages per insert under no-steal. Pair large values
+     * with mid-load {@code CHECKPOINT} (see load_1k) rather than only growing the buffer pool.
+     */
+    public static final String INDEX_KEY_PADDING_BYTES = "INDEX_KEY_PADDING_BYTES";
+    /**
+     * Number of RAM page frames in {@link com.example.database.storage.bufferpool.DefaultBufferPool}.
+     * Under no-steal, dirty pages occupy frames until {@code CHECKPOINT}/{@code flushAll}.
+     * Raise this for fat-key demos if mid-load checkpoints are not enough; default matches
+     * {@link com.example.database.storage.bufferpool.DefaultBufferPool#DEFAULT_FRAME_COUNT}.
+     */
+    public static final String BUFFER_POOL_FRAMES = "BUFFER_POOL_FRAMES";
 
     public static final int DEFAULT_CATALOG_LOCK_WAIT_SECONDS = 30;
     /** Five minutes — learning default; operators shorten for demos. */
@@ -53,6 +70,9 @@ public final class ServerEnvironment {
     public static final CheckpointStrategyKind DEFAULT_CHECKPOINT_STRATEGY = CheckpointStrategyKind.TIMEOUT;
     /** Same default as {@link DefaultPhysicalStorage#DEFAULT_PAGE_SIZE}. */
     public static final int DEFAULT_PAGE_SIZE = DefaultPhysicalStorage.DEFAULT_PAGE_SIZE;
+    public static final int DEFAULT_INDEX_KEY_PADDING_BYTES = 0;
+    /** Same default as {@link DefaultBufferPool#DEFAULT_FRAME_COUNT}. */
+    public static final int DEFAULT_BUFFER_POOL_FRAMES = DefaultBufferPool.DEFAULT_FRAME_COUNT;
 
     private static final List<String> DEFAULT_FILE_LINES = List.of(
             "# Auto-generated server settings. Edit values or override with environment variables.",
@@ -61,7 +81,9 @@ public final class ServerEnvironment {
             CHECKPOINT_STRATEGY + "=timeout",
             CHECKPOINT_TIMEOUT_SECONDS + "=" + DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
             MAX_WAL_SIZE_BYTES + "=" + DEFAULT_MAX_WAL_SIZE_BYTES,
-            PAGE_SIZE + "=" + DEFAULT_PAGE_SIZE
+            PAGE_SIZE + "=" + DEFAULT_PAGE_SIZE,
+            INDEX_KEY_PADDING_BYTES + "=" + DEFAULT_INDEX_KEY_PADDING_BYTES,
+            BUFFER_POOL_FRAMES + "=" + DEFAULT_BUFFER_POOL_FRAMES
     );
 
     private final Duration catalogLockWait;
@@ -70,6 +92,8 @@ public final class ServerEnvironment {
     private final Duration checkpointTimeout;
     private final long maxWalSizeBytes;
     private final int pageSize;
+    private final int indexKeyPaddingBytes;
+    private final int bufferPoolFrames;
 
     private ServerEnvironment(
             Duration catalogLockWait,
@@ -77,7 +101,9 @@ public final class ServerEnvironment {
             CheckpointStrategyKind checkpointStrategyKind,
             Duration checkpointTimeout,
             long maxWalSizeBytes,
-            int pageSize
+            int pageSize,
+            int indexKeyPaddingBytes,
+            int bufferPoolFrames
     ) {
         this.catalogLockWait = Objects.requireNonNull(catalogLockWait, "catalogLockWait");
         this.checkpointStrategyKind = Objects.requireNonNull(checkpointStrategyKind, "checkpointStrategyKind");
@@ -85,6 +111,8 @@ public final class ServerEnvironment {
         this.checkpointEnabled = checkpointEnabled;
         this.maxWalSizeBytes = maxWalSizeBytes;
         this.pageSize = pageSize;
+        this.indexKeyPaddingBytes = indexKeyPaddingBytes;
+        this.bufferPoolFrames = bufferPoolFrames;
     }
 
     /**
@@ -98,7 +126,9 @@ public final class ServerEnvironment {
                 DEFAULT_CHECKPOINT_STRATEGY,
                 Duration.ofSeconds(DEFAULT_CHECKPOINT_TIMEOUT_SECONDS),
                 DEFAULT_MAX_WAL_SIZE_BYTES,
-                DEFAULT_PAGE_SIZE
+                DEFAULT_PAGE_SIZE,
+                DEFAULT_INDEX_KEY_PADDING_BYTES,
+                DEFAULT_BUFFER_POOL_FRAMES
         );
     }
 
@@ -141,13 +171,19 @@ public final class ServerEnvironment {
         }
         int pageSize = resolveInt(PAGE_SIZE, values, DEFAULT_PAGE_SIZE);
         requireValidPageSize(pageSize);
+        int keyPadding = resolveInt(INDEX_KEY_PADDING_BYTES, values, DEFAULT_INDEX_KEY_PADDING_BYTES);
+        requireValidKeyPadding(keyPadding);
+        int poolFrames = resolveInt(BUFFER_POOL_FRAMES, values, DEFAULT_BUFFER_POOL_FRAMES);
+        requireValidBufferPoolFrames(poolFrames);
         return new ServerEnvironment(
                 Duration.ofSeconds(lockWaitSeconds),
                 checkpointEnabled,
                 strategyKind,
                 Duration.ofSeconds(timeoutSeconds),
                 maxWalSize,
-                pageSize
+                pageSize,
+                keyPadding,
+                poolFrames
         );
     }
 
@@ -181,6 +217,22 @@ public final class ServerEnvironment {
     }
 
     /**
+     * Trailing zeros after each encoded index key. Wired into {@link FileIndexStore}
+     * / {@link IndexKeyCodec}; stamped on {@code .idx} meta. {@code 0} means no pad.
+     */
+    public int indexKeyPaddingBytes() {
+        return indexKeyPaddingBytes;
+    }
+
+    /**
+     * Frame count for {@link com.example.database.storage.bufferpool.DefaultBufferPool}.
+     * Not stamped on disk — safe to change between restarts (unlike {@link #pageSize()}).
+     */
+    public int bufferPoolFrames() {
+        return bufferPoolFrames;
+    }
+
+    /**
      * Plug exactly one automatic strategy for the scheduler.
      * Change {@link #CHECKPOINT_STRATEGY} in {@code server.env} to switch implementations —
      * do not OR timeout and size in one class (that would abandon the Strategy split).
@@ -207,6 +259,28 @@ public final class ServerEnvironment {
         if (pageSize > 0xFFFF) {
             throw new IllegalArgumentException(
                     PAGE_SIZE + " must fit in u16 page offsets, got " + pageSize
+            );
+        }
+    }
+
+    static void requireValidKeyPadding(int paddingBytes) {
+        if (paddingBytes < 0 || paddingBytes > 0x8000) {
+            throw new IllegalArgumentException(
+                    INDEX_KEY_PADDING_BYTES + " must be in [0, 32768], got " + paddingBytes
+            );
+        }
+    }
+
+    static void requireValidBufferPoolFrames(int frames) {
+        if (frames < 1) {
+            throw new IllegalArgumentException(
+                    BUFFER_POOL_FRAMES + " must be at least 1, got " + frames
+            );
+        }
+        // Soft cap: each frame holds one PAGE_SIZE buffer; tens of thousands is still demo-sized.
+        if (frames > 100_000) {
+            throw new IllegalArgumentException(
+                    BUFFER_POOL_FRAMES + " too large (max 100000), got " + frames
             );
         }
     }
