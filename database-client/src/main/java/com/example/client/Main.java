@@ -1,35 +1,71 @@
 package com.example.client;
 
-import com.example.client.wire.ResponsePrinter;
-import com.example.client.wire.WireResponse;
-
 import java.io.BufferedReader;
 import java.io.Console;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 
+import com.example.client.wire.ResponsePrinter;
+import com.example.client.wire.WireResponse;
+
 /**
- * Interactive console: one TCP session, many SQL batches. Request payload stays plain
- * UTF-8 SQL; responses are JSON wire messages rendered by {@link ResponsePrinter}.
+ * Interactive REPL or script mode over one TCP session.
+ * <p>
+ * REPL: {@code [host [port]]}<br>
+ * Script: {@code --script in.txt --out out.txt [--stop-on-error] [host [port]]}
+ * <p>
+ * Request payload stays plain UTF-8 SQL; responses are JSON wire messages rendered
+ * by {@link ResponsePrinter}.
  */
 public final class Main {
 
-    private static final String DEFAULT_HOST = "127.0.0.1";
-    private static final int DEFAULT_PORT = 9090;
     private static final String PROMPT = "sql> ";
 
     public static void main(String[] args) throws IOException {
-        String host = args.length > 0 ? args[0] : DEFAULT_HOST;
-        int port = args.length > 1 ? Integer.parseInt(args[1]) : DEFAULT_PORT;
+        ClientArgs config;
+        try {
+            config = ClientArgs.parse(args);
+        } catch (IllegalArgumentException e) {
+            System.err.println("usage: [host [port]]");
+            System.err.println("   or: --script in.txt --out out.txt [--stop-on-error] [host [port]]");
+            System.err.println(e.getMessage());
+            System.exit(2);
+            return;
+        }
 
+        if (config.scriptMode()) {
+            runScript(config);
+        } else {
+            runRepl(config);
+        }
+    }
+
+    private static void runScript(ClientArgs config) throws IOException {
+        var script = config.scriptPath().orElseThrow();
+        var out = config.outPath().orElseThrow();
+        System.out.println("Connected to " + config.host() + ":" + config.port()
+                + " (script " + script + " → " + out + ")");
+        int errors;
+        try (DatabaseClient client = new DatabaseClient(config.host(), config.port())) {
+            ScriptRunner runner = new ScriptRunner(client, config.stopOnError());
+            errors = runner.run(script, out, System.out);
+        }
+        if (errors > 0) {
+            System.err.println("Finished with " + errors + " error response(s); transcript: " + out);
+            System.exit(1);
+        }
+        System.out.println("Done; transcript: " + out);
+    }
+
+    private static void runRepl(ClientArgs config) throws IOException {
         ResponsePrinter printer = new ResponsePrinter(System.out);
         Console console = System.console();
-        try (DatabaseClient client = new DatabaseClient(host, port);
+        try (DatabaseClient client = new DatabaseClient(config.host(), config.port());
              BufferedReader stdin = console == null
                      ? new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))
                      : null) {
-            System.out.println("Connected to " + host + ":" + port + " (type quit to exit)");
+            System.out.println("Connected to " + config.host() + ":" + config.port() + " (type quit to exit)");
             while (true) {
                 String line = readLine(console, stdin);
                 if (line == null) {
