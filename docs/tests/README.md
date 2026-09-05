@@ -42,4 +42,6 @@ From the repo root (Git Bash / WSL / macOS / Linux):
 bash scripts/run_1k_page_graph.sh
 ```
 
-Wipes `test/data`, starts the server there with `PAGE_SIZE=8192`, runs `input/cmds/load_1k.txt`, `CHECKPOINT`, then writes `out/page-graph/idx_users_name.html`. Override with env vars: `DATA_DIR`, `PORT`, `PAGE_SIZE`.
+Wipes `test/data`, starts the server there with `PAGE_SIZE=8192`, runs `input/cmds/load_1k.txt`
+(PK on `id` + secondary `idx_users_name`), `CHECKPOINT`, then writes `out/page-graph/users.html`
+(tabs for every `.idx`). Override with env vars: `DATA_DIR`, `PORT`, `PAGE_SIZE`, `TABLE_DIR`, `OUT_HTML`.

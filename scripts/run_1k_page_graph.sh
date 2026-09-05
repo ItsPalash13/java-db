@@ -12,8 +12,8 @@ PORT="${PORT:-9090}"
 PAGE_SIZE="${PAGE_SIZE:-8192}"
 HOST="${HOST:-127.0.0.1}"
 SCRIPT="${SCRIPT:-input/cmds/load_1k.txt}"
-OUT_HTML="${OUT_HTML:-out/page-graph/idx_users_name.html}"
-IDX="${IDX:-${DATA_DIR}/shop/users/idx_users_name.idx}"
+OUT_HTML="${OUT_HTML:-out/page-graph/users.html}"
+TABLE_DIR="${TABLE_DIR:-${DATA_DIR}/shop/users}"
 TRANSCRIPT_DIR="${TRANSCRIPT_DIR:-out}"
 SERVER_PID=""
 
@@ -89,9 +89,10 @@ mvn -pl database-client exec:java \
   "-Dexec.args=--script ${TRANSCRIPT_DIR}/.checkpoint.txt --out ${TRANSCRIPT_DIR}/checkpoint.run.txt ${HOST} ${PORT}"
 
 echo "==> page graph → ${OUT_HTML}"
-python tools/page-graph/page_graph.py --idx "${IDX}" --out "${OUT_HTML}"
+python tools/page-graph/page_graph.py --table-dir "${TABLE_DIR}" --out "${OUT_HTML}"
 
 echo "==> done"
 echo "    data:  ${DATA_DIR}"
+echo "    table: ${TABLE_DIR}"
 echo "    html:  ${OUT_HTML}"
 echo "    open:  file:///${ROOT//\\//}/${OUT_HTML}"

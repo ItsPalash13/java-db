@@ -2,9 +2,11 @@
 """
 Offline visualizer for JavaDatabase .idx / .ibd pages.
 
-Reads slotted pages (size from meta stamp or --page-size),
-builds a B+ tree graph, and writes a self-contained interactive HTML file.
-Click a leaf node to list entries; click an entry to open the heap page/row.
+Reads slotted pages (size from meta stamp or --page-size), builds B+ tree
+graph(s), and writes a self-contained interactive HTML file.
+
+Use --idx for one index, or --table-dir to load every .idx under a table
+folder (shared heap, index tabs). Click a leaf entry for the heap row card.
 """
 
 from __future__ import annotations
@@ -229,12 +231,17 @@ def load_catalog(path: Path, index_hint: str | None) -> dict[str, Any]:
             if ix.get("name") == index_hint:
                 index = ix
                 break
+        # Filename stem often matches index name (idx_users_name / pk_users_id).
+        if index is None:
+            for ix in indexes:
+                if ix.get("name") == Path(index_hint).stem:
+                    index = ix
+                    break
         if index is None and len(indexes) == 1:
             index = indexes[0]
     elif len(indexes) == 1:
         index = indexes[0]
     if index is None and indexes:
-        # Prefer filename stem match already tried; else first index.
         index = indexes[0]
     if index is None:
         raise PageError(f"{path}: no indexes in catalog")
@@ -254,6 +261,7 @@ def load_catalog(path: Path, index_hint: str | None) -> dict[str, Any]:
         "heapColumns": heap_names,
         "heapTypes": heap_types,
         "unique": bool(index.get("unique")),
+        "allIndexNames": [ix.get("name") for ix in indexes],
     }
 
 
@@ -465,7 +473,6 @@ def add_heap_nodes(
     Heap detail is shown in the side panel after a leaf entry click.
     """
     graph["referencedHeapPages"] = sorted(referenced)
-    # Keep heapPages in the model only; canvas stays META / INTERNAL / LEAF / nextLeaf.
     _ = heap_pages
 
 
@@ -514,6 +521,118 @@ def build_model(
     }
 
 
+def discover_table_dir(table_dir: Path) -> tuple[Path, Path, list[Path]]:
+    """Resolve catalog.json, one .ibd, and every .idx under a table directory."""
+    table_dir = table_dir.resolve()
+    if not table_dir.is_dir():
+        raise PageError(f"table dir not found: {table_dir}")
+    catalog = table_dir / "catalog.json"
+    if not catalog.is_file():
+        raise PageError(f"missing catalog.json in {table_dir}")
+    ibds = sorted(table_dir.glob("*.ibd"))
+    if not ibds:
+        raise PageError(f"no .ibd in {table_dir}")
+    idxs = sorted(table_dir.glob("*.idx"))
+    if not idxs:
+        raise PageError(f"no .idx files in {table_dir}")
+    return catalog, ibds[0], idxs
+
+
+def build_table_bundle(
+    table_dir: Path,
+    page_size: int | None = None,
+) -> dict[str, Any]:
+    """
+    Parse every .idx in a table directory into one HTML model with shared heap pages
+    and one tab per index.
+    """
+    catalog_path, ibd_path, idx_paths = discover_table_dir(table_dir)
+    # Resolve page size from the first index (all stamps must match).
+    if page_size is None:
+        page_size = detect_page_size(idx_paths[0])
+        heap_stamp = detect_page_size(ibd_path)
+        if heap_stamp != page_size:
+            raise PageError(
+                f"idx stamped pageSize {page_size} != ibd stamped pageSize {heap_stamp}"
+            )
+
+    # Heap is shared — decode once from catalog column layout.
+    base_schema = load_catalog(catalog_path, idx_paths[0].stem)
+    ibd_pages = read_pages(ibd_path, page_size)
+    heap = parse_heap_file(ibd_pages, base_schema["heapTypes"], base_schema["heapColumns"])
+    heap_pages = heap["pages"]
+
+    indexes: list[dict[str, Any]] = []
+    for idx_path in idx_paths:
+        schema = load_catalog(catalog_path, idx_path.stem)
+        stamped = detect_page_size(idx_path)
+        if stamped != page_size:
+            raise PageError(
+                f"{idx_path.name}: stamped pageSize {stamped} != {page_size}"
+            )
+        graph = parse_index_file(read_pages(idx_path, page_size), schema["keyTypes"])
+        referenced: set[int] = set()
+        for leaf in graph["leaves"].values():
+            for entry in leaf["entries"]:
+                referenced.add(entry["ridPage"])
+        cols = ", ".join(schema["keyColumns"])
+        uniq = " UNIQUE" if schema.get("unique") else ""
+        indexes.append(
+            {
+                "id": schema["indexName"],
+                "label": f"{schema['indexName']} ({cols}){uniq}",
+                "schema": schema,
+                "meta": graph["meta"],
+                "nodes": graph["nodes"],
+                "edges": graph["edges"],
+                "leaves": graph["leaves"],
+                "referencedHeapPages": sorted(referenced),
+                "source": {
+                    "idx": str(idx_path),
+                    "ibd": str(ibd_path),
+                    "catalog": str(catalog_path),
+                    "pageSize": page_size,
+                },
+            }
+        )
+
+    return {
+        "table": base_schema.get("table") or table_dir.name,
+        "tableDir": str(table_dir.resolve()),
+        "heapMeta": heap["meta"],
+        "heapPages": heap_pages,
+        "indexes": indexes,
+        "note": "Disk image only — CHECKPOINT / stop the server for a consistent dump.",
+    }
+
+
+def model_to_bundle(model: dict[str, Any]) -> dict[str, Any]:
+    """Wrap a single-index build_model() result into the multi-tab bundle shape."""
+    schema = model["schema"]
+    cols = ", ".join(schema["keyColumns"])
+    uniq = " UNIQUE" if schema.get("unique") else ""
+    return {
+        "table": schema.get("table") or "?",
+        "tableDir": str(Path(model["source"]["idx"]).parent),
+        "heapMeta": model.get("heapMeta") or {},
+        "heapPages": model["heapPages"],
+        "indexes": [
+            {
+                "id": schema["indexName"],
+                "label": f"{schema['indexName']} ({cols}){uniq}",
+                "schema": schema,
+                "meta": model["meta"],
+                "nodes": model["nodes"],
+                "edges": model["edges"],
+                "leaves": model["leaves"],
+                "referencedHeapPages": model.get("referencedHeapPages", []),
+                "source": model["source"],
+            }
+        ],
+        "note": model.get("note", ""),
+    }
+
+
 HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -550,7 +669,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       display: flex;
       flex-wrap: wrap;
       gap: 0.75rem 1.5rem;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header-left {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1.25rem;
       align-items: baseline;
+      min-width: 0;
     }
     header h1 {
       margin: 0;
@@ -558,6 +685,28 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       font-weight: 600;
     }
     header .meta { color: var(--muted); font-size: 0.85rem; }
+    #index-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-left: auto;
+      justify-content: flex-end;
+    }
+    .index-tab {
+      border: 1px solid var(--border);
+      background: #0f172a;
+      color: var(--muted);
+      padding: 0.35rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    .index-tab:hover { color: var(--text); border-color: var(--accent); }
+    .index-tab.active {
+      background: #0c4a6e;
+      color: var(--accent);
+      border-color: var(--accent);
+    }
     main {
       flex: 1;
       display: grid;
@@ -589,6 +738,42 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       font-size: 0.8rem;
       color: var(--leaf);
       margin-bottom: 0.75rem;
+    }
+    .row-card {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      margin: 0.75rem 0 1rem;
+    }
+    .row-card h3 {
+      margin: 0 0 0.6rem;
+      font-size: 0.9rem;
+      color: var(--heap);
+    }
+    .row-kv {
+      display: grid;
+      grid-template-columns: minmax(6rem, 30%) 1fr;
+      gap: 0.25rem 0.75rem;
+      font-size: 0.85rem;
+      margin-bottom: 0.35rem;
+    }
+    .row-kv .k { color: var(--muted); }
+    .row-kv .v code { color: var(--text); }
+    .heap-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin: 0.5rem 0 0.75rem;
+    }
+    .chip {
+      display: inline-block;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      background: #78350f;
+      color: var(--heap);
+      border: 1px solid #a16207;
     }
     table {
       width: 100%;
@@ -623,19 +808,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     @media (max-width: 900px) {
       main { grid-template-columns: 1fr; grid-template-rows: 45vh 1fr; }
       #network { border-right: none; border-bottom: 1px solid var(--border); }
+      #index-tabs { margin-left: 0; width: 100%; justify-content: flex-start; }
     }
   </style>
 </head>
 <body>
   <header>
-    <h1>Index → heap page graph</h1>
-    <span class="meta" id="header-meta"></span>
+    <div class="header-left">
+      <h1>Index → heap page graph</h1>
+      <span class="meta" id="header-meta"></span>
+    </div>
+    <div id="index-tabs" aria-label="Indexes"></div>
   </header>
   <main>
     <div id="network"></div>
     <aside id="detail">
       <p class="hint">Click a <span class="pill leaf">LEAF</span> node, then an entry row to open the
-        <span class="pill heap">HEAP</span> page in the panel (Rid links are not drawn on the tree).</p>
+        <span class="pill heap">HEAP</span> row and page (Rid links are not drawn on the tree).</p>
       <div id="panel">
         <h2>Select a leaf</h2>
         <p class="hint">Canvas shows the B+ tree: internal root → leaf children (solid), sibling scan chain (dashed nextLeaf). Heap rows appear here after you pick an entry.</p>
@@ -643,14 +832,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </aside>
   </main>
   <script>
+    // Bundle: { table, heapPages, heapMeta, indexes: [...], note }
     const DATA = __DATA__;
 
     const headerMeta = document.getElementById("header-meta");
-    const schema = DATA.schema;
-    headerMeta.textContent =
-      `${schema.table || "?"} · ${schema.indexName} (${schema.keyColumns.join(", ")})` +
-      ` · height=${DATA.meta.height ?? "?"} root=${DATA.meta.rootPageId ?? "?"}` +
-      ` · pageSize=${DATA.source?.pageSize ?? DATA.meta?.pageSize ?? "?"}`;
+    const tabsEl = document.getElementById("index-tabs");
+    const panel = document.getElementById("panel");
+    const networkEl = document.getElementById("network");
+
+    let activeIndex = null;
+    let network = null;
+    let nodes = null;
+    let edges = null;
+    let nextEdgeId = 0;
+    let overlayEdgeIds = [];
+    let selectedLeaf = null;
+    let selectedEntry = null;
 
     // vis-network defaults hover to a light fill; without an explicit hover color,
     // light text (#e2e8f0) becomes unreadable. Keep hover/highlight on dark fills.
@@ -670,20 +867,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       }
     };
 
-    // Index tree only — HEAP / Rid edges stay out of the canvas to avoid spaghetti.
-    const treeNodes = DATA.nodes.filter(n => n.kind !== "HEAP");
-    const treeEdges = DATA.edges.filter(e => e.kind !== "rid");
-
     /**
      * vis-network hierarchical layout treats every directed edge as a level constraint.
      * nextLeaf links are sibling scan order, not tree depth — without explicit levels
      * the layout stacks all leaves in one vertical chain under the first child.
      */
-    function computeTreeLayout(meta, nodes, edges, leaves) {
+    function computeTreeLayout(meta, nodesArr, edgesArr, leaves) {
       const levels = {};
-      const hasMeta = nodes.some(n => n.kind === "META");
-      const childEdges = edges.filter(e => e.kind === "child" || e.kind === "root");
-      nodes.filter(n => n.kind === "META").forEach(n => { levels[n.id] = 0; });
+      const hasMeta = nodesArr.some(n => n.kind === "META");
+      const childEdges = edgesArr.filter(e => e.kind === "child" || e.kind === "root");
+      nodesArr.filter(n => n.kind === "META").forEach(n => { levels[n.id] = 0; });
 
       const rootId = meta.rootPageId >= 0 ? `idx:${meta.rootPageId}` : null;
       if (rootId) {
@@ -703,7 +896,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
       }
 
-      const leafNodes = nodes.filter(n => n.kind === "LEAF");
+      const leafNodes = nodesArr.filter(n => n.kind === "LEAF");
       const nextTargets = new Set();
       for (const info of Object.values(leaves)) {
         if (info.nextLeaf >= 0) {
@@ -732,53 +925,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       return { levels, leafOrder };
     }
 
-    const { levels, leafOrder } = computeTreeLayout(
-      DATA.meta ?? {},
-      treeNodes,
-      treeEdges,
-      DATA.leaves ?? {},
-    );
+    function esc(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
 
-    const nodes = new vis.DataSet(treeNodes.map(n => ({
-      id: n.id,
-      label: n.label,
-      title: n.title,
-      shape: n.kind === "LEAF" ? "ellipse" : "box",
-      color: colorFor(n.kind),
-      font: { color: "#e2e8f0", multi: true },
-      margin: 10,
-      kind: n.kind,
-      pageId: n.pageId,
-      level: levels[n.id],
-      ...(n.kind === "LEAF" && leafOrder[n.id] !== undefined ? { order: leafOrder[n.id] } : {}),
-    })));
-
-    const edges = new vis.DataSet(treeEdges.map((e, i) => ({
-      id: i,
-      from: e.from,
-      to: e.to,
-      label: e.label || "",
-      dashes: !!e.dashes,
-      arrows: "to",
-      color: e.kind === "nextLeaf"
-        ? { color: "#4ade80" }
-        : (e.color || { color: "#64748b" }),
-      font: { color: "#94a3b8", size: 11, strokeWidth: 0 },
-      kind: e.kind,
-      smooth: e.kind === "nextLeaf"
-        ? { type: "curvedCW", roundness: 0.15 }
-        : { type: "cubicBezier", forceDirection: "vertical", roundness: 0.4 },
-    })));
-
-    let nextEdgeId = treeEdges.length;
-    let overlayEdgeIds = [];
+    function fmtVal(v) {
+      if (v === null || v === undefined) return "<em>NULL</em>";
+      if (typeof v === "boolean") return v ? "true" : "false";
+      return esc(v);
+    }
 
     function clearRidOverlay() {
+      if (!edges || !nodes) return;
       if (overlayEdgeIds.length) {
         edges.remove(overlayEdgeIds);
         overlayEdgeIds = [];
       }
-      // Drop any temporary HEAP nodes added for a Rid preview.
       const heapIds = nodes.getIds().filter(id => String(id).startsWith("ibd:"));
       if (heapIds.length) {
         nodes.remove(heapIds);
@@ -827,58 +993,89 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       network.selectNodes([`idx:${leafPageId}`, heapId]);
       network.focus(heapId, { scale: 1.05, animation: true });
     }
-    const network = new vis.Network(
-      document.getElementById("network"),
-      { nodes, edges },
-      {
-        layout: {
-          hierarchical: {
-            enabled: true,
-            direction: "UD",
-            // Child edges set explicit level/order; nextLeaf stays on the leaf row.
-            sortMethod: "directed",
-            levelSeparation: 120,
-            nodeSpacing: 180,
-            treeSpacing: 220,
-            blockShifting: true,
-            edgeMinimization: false,
-            parentCentralization: true,
-          },
-        },
-        physics: false,
-        interaction: { hover: true, tooltipDelay: 120 },
-        nodes: {
-          font: { color: "#e2e8f0", multi: true },
-          // Chosen labels stay light on our dark hover fills (not black-on-default).
-          chosen: { label: false, node: true },
-        },
-      }
-    );
-    network.fit({ animation: { duration: 300, easingFunction: "easeInOutQuad" } });
 
-    const panel = document.getElementById("panel");
-    let selectedLeaf = null;
-    let selectedEntry = null;
-
-    function esc(s) {
-      return String(s)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
+    function heapLiveCount(page) {
+      return page.slots.filter(s => s.live).length;
     }
 
-    function fmtVal(v) {
-      if (v === null || v === undefined) return "<em>NULL</em>";
-      if (typeof v === "boolean") return v ? "true" : "false";
-      return esc(v);
+    function renderHeapTable(pageId, highlightSlot) {
+      const page = DATA.heapPages[String(pageId)];
+      if (!page) {
+        return `<p class="hint" style="color:var(--warn)">Heap page ${pageId} not in .ibd file.</p>`;
+      }
+      const cols = activeIndex.schema.heapColumns;
+      const head = ["slot", "rowId", ...cols].map(c => `<th>${esc(c)}</th>`).join("");
+      const body = page.slots.map(s => {
+        if (!s.live) {
+          return `<tr class="tombstone"><td>${s.slotId}</td><td colspan="${1 + cols.length}">tombstone</td></tr>`;
+        }
+        if (s.error) {
+          return `<tr><td>${s.slotId}</td><td colspan="${1 + cols.length}">decode error: ${esc(s.error)}</td></tr>`;
+        }
+        const hl = s.slotId === highlightSlot ? " highlight" : "";
+        const vals = cols.map(c => `<td>${fmtVal(s.columns[c])}</td>`).join("");
+        return `<tr class="slot-row${hl}"><td>${s.slotId}</td><td>${s.rowId}</td>${vals}</tr>`;
+      }).join("");
+      return `
+        <table>
+          <thead><tr>${head}</tr></thead>
+          <tbody>${body}</tbody>
+        </table>`;
+    }
+
+    function renderRowCard(leafPageId, entry) {
+      const page = DATA.heapPages[String(entry.ridPage)];
+      const schema = activeIndex.schema;
+      const cols = schema.heapColumns || [];
+      let rowId = "?";
+      let colRows = "";
+      if (page) {
+        const slot = page.slots.find(s => s.slotId === entry.ridSlot);
+        if (slot && slot.live && !slot.error) {
+          rowId = slot.rowId;
+          colRows = cols.map(c => `
+            <div class="row-kv"><span class="k">${esc(c)}</span>
+              <span class="v">${fmtVal(slot.columns[c])}</span></div>`).join("");
+        } else if (slot && slot.error) {
+          colRows = `<p class="hint" style="color:var(--warn)">decode error: ${esc(slot.error)}</p>`;
+        } else if (slot && !slot.live) {
+          colRows = `<p class="hint">slot is a tombstone</p>`;
+        } else {
+          colRows = `<p class="hint" style="color:var(--warn)">slot not found on heap page</p>`;
+        }
+      } else {
+        colRows = `<p class="hint" style="color:var(--warn)">heap page missing from dump</p>`;
+      }
+
+      const chips = page ? `
+        <div class="heap-chips">
+          <span class="chip">page ${page.pageId}</span>
+          <span class="chip">free ${page.free} bytes</span>
+          <span class="chip">${page.slotCount} slots</span>
+          <span class="chip">${heapLiveCount(page)} live</span>
+        </div>` : "";
+
+      return `
+        <div class="row-card">
+          <h3>Selected row</h3>
+          <div class="row-kv"><span class="k">index key</span>
+            <span class="v"><code>${esc(entry.keyDisplay)}</code></span></div>
+          <div class="row-kv"><span class="k">Rid</span>
+            <span class="v"><code>(${entry.ridPage}, ${entry.ridSlot})</code></span></div>
+          <div class="row-kv"><span class="k">rowId</span>
+            <span class="v"><code>${esc(rowId)}</code></span></div>
+          ${colRows}
+          ${chips}
+          <h3 style="margin-top:0.75rem;color:var(--accent)">Heap page ${entry.ridPage}</h3>
+          ${renderHeapTable(entry.ridPage, entry.ridSlot)}
+        </div>`;
     }
 
     function renderLeaf(pageId) {
       clearRidOverlay();
       selectedLeaf = pageId;
       selectedEntry = null;
-      const leaf = DATA.leaves[String(pageId)];
+      const leaf = activeIndex.leaves[String(pageId)];
       if (!leaf) {
         panel.innerHTML = `<h2>Leaf p${pageId}</h2><p class="hint">No entry data.</p>`;
         return;
@@ -894,7 +1091,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="crumb">idx leaf p${pageId} · ${leaf.entries.length} live · nextLeaf=${leaf.nextLeaf}</div>
         <p class="hint">Keys in this leaf point at heap pages: ${heapTargets.map(p => "p" + p).join(", ") || "(none)"}</p>
         <h2>Leaf entries</h2>
-        <p class="hint">Click a row to open that heap page and draw one Rid edge on the graph.</p>
+        <p class="hint">Click a row to show the heap row card (key, Rid, rowId, columns) and the full heap page.</p>
         <table>
           <thead><tr><th>slot</th><th>key</th><th>Rid</th></tr></thead>
           <tbody id="entry-body">${rows || '<tr><td colspan="3">empty leaf</td></tr>'}</tbody>
@@ -913,76 +1110,197 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       document.querySelectorAll(".entry-row").forEach((tr, i) => {
         tr.classList.toggle("active", i === entryIndex);
       });
-      const entry = DATA.leaves[String(leafPageId)].entries[entryIndex];
+      const entry = activeIndex.leaves[String(leafPageId)].entries[entryIndex];
       showEntryRid(leafPageId, entry);
-      renderHeap(entry.ridPage, entry.ridSlot, leafPageId, entry);
-    }
-
-    function renderHeap(pageId, highlightSlot, leafPageId, entry) {
       const block = document.getElementById("heap-block");
-      if (!block) return;
-      const page = DATA.heapPages[String(pageId)];
-      if (!page) {
-        block.innerHTML = `<h3>Heap p${pageId}</h3><p class="hint" style="color:var(--warn)">Page not in .ibd file.</p>`;
-        return;
+      if (block) {
+        block.innerHTML = `
+          <div class="crumb">idx leaf p${leafPageId} / key ${esc(entry.keyDisplay)} → Rid(${entry.ridPage}, ${entry.ridSlot})</div>
+          ${renderRowCard(leafPageId, entry)}`;
       }
-      const cols = schema.heapColumns;
-      const head = ["slot", "rowId", ...cols].map(c => `<th>${esc(c)}</th>`).join("");
-      const body = page.slots.map(s => {
-        if (!s.live) {
-          return `<tr class="tombstone"><td>${s.slotId}</td><td colspan="${1 + cols.length}">tombstone</td></tr>`;
-        }
-        if (s.error) {
-          return `<tr><td>${s.slotId}</td><td colspan="${1 + cols.length}">decode error: ${esc(s.error)}</td></tr>`;
-        }
-        const hl = s.slotId === highlightSlot ? " highlight" : "";
-        const vals = cols.map(c => `<td>${fmtVal(s.columns[c])}</td>`).join("");
-        return `<tr class="slot-row${hl}"><td>${s.slotId}</td><td>${s.rowId}</td>${vals}</tr>`;
-      }).join("");
-      block.innerHTML = `
-        <h3>Heap page ${pageId}</h3>
-        <div class="crumb">idx leaf p${leafPageId} / key ${esc(entry.keyDisplay)} → Rid(${pageId}, ${highlightSlot})</div>
-        <p class="hint">${page.slotCount} slots · free ${page.free} bytes</p>
-        <table>
-          <thead><tr>${head}</tr></thead>
-          <tbody>${body}</tbody>
-        </table>`;
     }
 
-    network.on("click", (params) => {
-      if (!params.nodes.length) {
-        clearRidOverlay();
-        return;
+    function updateHeader() {
+      const schema = activeIndex.schema;
+      const pageSize =
+        activeIndex.source?.pageSize ??
+        activeIndex.meta?.pageSize ??
+        DATA.heapMeta?.pageSize ??
+        "?";
+      headerMeta.textContent =
+        `${DATA.table || schema.table || "?"} · ${schema.indexName} (${schema.keyColumns.join(", ")})` +
+        ` · height=${activeIndex.meta.height ?? "?"} root=${activeIndex.meta.rootPageId ?? "?"}` +
+        ` · pageSize=${pageSize}` +
+        (DATA.indexes.length > 1 ? ` · ${DATA.indexes.length} indexes` : "");
+    }
+
+    function mountIndex(index) {
+      activeIndex = index;
+      selectedLeaf = null;
+      selectedEntry = null;
+      clearRidOverlay();
+      updateHeader();
+
+      // Index tree only — HEAP / Rid edges stay out of the canvas to avoid spaghetti.
+      const treeNodes = index.nodes.filter(n => n.kind !== "HEAP");
+      const treeEdges = index.edges.filter(e => e.kind !== "rid");
+      const { levels, leafOrder } = computeTreeLayout(
+        index.meta ?? {},
+        treeNodes,
+        treeEdges,
+        index.leaves ?? {},
+      );
+
+      nodes = new vis.DataSet(treeNodes.map(n => ({
+        id: n.id,
+        label: n.label,
+        title: n.title,
+        shape: n.kind === "LEAF" ? "ellipse" : "box",
+        color: colorFor(n.kind),
+        font: { color: "#e2e8f0", multi: true },
+        margin: 10,
+        kind: n.kind,
+        pageId: n.pageId,
+        level: levels[n.id],
+        ...(n.kind === "LEAF" && leafOrder[n.id] !== undefined ? { order: leafOrder[n.id] } : {}),
+      })));
+
+      edges = new vis.DataSet(treeEdges.map((e, i) => ({
+        id: i,
+        from: e.from,
+        to: e.to,
+        label: e.label || "",
+        dashes: !!e.dashes,
+        arrows: "to",
+        color: e.kind === "nextLeaf"
+          ? { color: "#4ade80" }
+          : (e.color || { color: "#64748b" }),
+        font: { color: "#94a3b8", size: 11, strokeWidth: 0 },
+        kind: e.kind,
+        smooth: e.kind === "nextLeaf"
+          ? { type: "curvedCW", roundness: 0.15 }
+          : { type: "cubicBezier", forceDirection: "vertical", roundness: 0.4 },
+      })));
+
+      nextEdgeId = treeEdges.length;
+      overlayEdgeIds = [];
+
+      if (network) {
+        network.destroy();
+        network = null;
       }
-      const id = params.nodes[0];
-      const node = nodes.get(id);
-      if (!node) return;
-      if (node.kind === "LEAF") {
-        renderLeaf(node.pageId);
-      } else if (node.kind === "HEAP") {
-        // Temporary overlay node — show that page in the panel.
-        panel.innerHTML = `
-          <div class="crumb">ibd page ${node.pageId}</div>
-          <h2>Heap page ${node.pageId}</h2>
-          <div id="heap-block"></div>`;
-        renderHeap(node.pageId, -1, selectedLeaf ?? "?", { keyDisplay: "(browse)" });
-      } else {
-        clearRidOverlay();
-        panel.innerHTML = `
-          <h2>${esc(node.kind)} p${node.pageId}</h2>
-          <p class="hint">${esc(node.title || "")}</p>
-          <p class="hint">Select a LEAF to inspect keys; click an entry to follow one Rid into the heap.</p>`;
+      network = new vis.Network(
+        networkEl,
+        { nodes, edges },
+        {
+          layout: {
+            hierarchical: {
+              enabled: true,
+              direction: "UD",
+              // Child edges set explicit level/order; nextLeaf stays on the leaf row.
+              sortMethod: "directed",
+              levelSeparation: 120,
+              nodeSpacing: 180,
+              treeSpacing: 220,
+              blockShifting: true,
+              edgeMinimization: false,
+              parentCentralization: true,
+            },
+          },
+          physics: false,
+          interaction: { hover: true, tooltipDelay: 120 },
+          nodes: {
+            font: { color: "#e2e8f0", multi: true },
+            // Chosen labels stay light on our dark hover fills (not black-on-default).
+            chosen: { label: false, node: true },
+          },
+        }
+      );
+      network.fit({ animation: { duration: 300, easingFunction: "easeInOutQuad" } });
+
+      network.on("click", (params) => {
+        if (!params.nodes.length) {
+          clearRidOverlay();
+          return;
+        }
+        const id = params.nodes[0];
+        const node = nodes.get(id);
+        if (!node) return;
+        if (node.kind === "LEAF") {
+          renderLeaf(node.pageId);
+        } else if (node.kind === "HEAP") {
+          panel.innerHTML = `
+            <div class="crumb">ibd page ${node.pageId}</div>
+            <h2>Heap page ${node.pageId}</h2>
+            <div id="heap-block"></div>`;
+          const page = DATA.heapPages[String(node.pageId)];
+          const chips = page ? `
+            <div class="heap-chips">
+              <span class="chip">page ${page.pageId}</span>
+              <span class="chip">free ${page.free} bytes</span>
+              <span class="chip">${page.slotCount} slots</span>
+              <span class="chip">${heapLiveCount(page)} live</span>
+            </div>` : "";
+          document.getElementById("heap-block").innerHTML =
+            chips + renderHeapTable(node.pageId, -1);
+        } else {
+          clearRidOverlay();
+          panel.innerHTML = `
+            <h2>${esc(node.kind)} p${node.pageId}</h2>
+            <p class="hint">${esc(node.title || "")}</p>
+            <p class="hint">Select a LEAF to inspect keys; click an entry to follow one Rid into the heap.</p>`;
+        }
+      });
+
+      panel.innerHTML = `
+        <h2>Select a leaf</h2>
+        <p class="hint">Index <code>${esc(index.id)}</code> — canvas shows the B+ tree. Click a LEAF, then an entry for the row card.</p>`;
+    }
+
+    function switchIndex(indexId) {
+      const index = DATA.indexes.find(ix => ix.id === indexId);
+      if (!index) return;
+      tabsEl.querySelectorAll(".index-tab").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.id === indexId);
+      });
+      mountIndex(index);
+    }
+
+    function buildTabs() {
+      tabsEl.innerHTML = "";
+      for (const ix of DATA.indexes) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "index-tab";
+        btn.dataset.id = ix.id;
+        btn.textContent = ix.label || ix.id;
+        btn.addEventListener("click", () => switchIndex(ix.id));
+        tabsEl.appendChild(btn);
       }
-    });
+    }
+
+    if (!DATA.indexes || !DATA.indexes.length) {
+      headerMeta.textContent = `${DATA.table || "?"} · no indexes`;
+      panel.innerHTML = `<h2>No indexes</h2><p class="hint">Bundle has no .idx entries.</p>`;
+    } else {
+      buildTabs();
+      switchIndex(DATA.indexes[0].id);
+    }
   </script>
 </body>
 </html>
 """
 
 
-def write_html(model: dict[str, Any], out_path: Path) -> None:
-    title = f"{model['schema'].get('table', '?')}.{model['schema']['indexName']}"
-    payload = json.dumps(model, ensure_ascii=False)
+def write_html(bundle: dict[str, Any], out_path: Path) -> None:
+    """Serialize a table/index bundle into the self-contained HTML viewer."""
+    title = bundle.get("table") or "?"
+    if len(bundle.get("indexes") or []) == 1:
+        schema = bundle["indexes"][0].get("schema") or {}
+        title = f"{schema.get('table', title)}.{schema.get('indexName', 'index')}"
+    elif bundle.get("indexes"):
+        title = f"{title} ({len(bundle['indexes'])} indexes)"
+    payload = json.dumps(bundle, ensure_ascii=False)
     html = HTML_TEMPLATE.replace("__TITLE__", title).replace("__DATA__", payload)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html, encoding="utf-8")
@@ -1001,18 +1319,27 @@ def infer_paths(idx: Path) -> tuple[Path | None, Path | None]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Build an interactive HTML graph of a .idx B+ tree linked to .ibd heap rows."
+        description=(
+            "Build an interactive HTML graph of .idx B+ tree(s) linked to .ibd heap rows. "
+            "Pass either --idx (one index) or --table-dir (all .idx in a table folder)."
+        )
     )
-    parser.add_argument("--idx", type=Path, required=True, help="Path to .idx file")
-    parser.add_argument("--ibd", type=Path, help="Path to table .ibd (default: sibling *.ibd)")
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--idx", type=Path, help="Path to a single .idx file")
+    src.add_argument(
+        "--table-dir",
+        type=Path,
+        help="Table directory with catalog.json, *.ibd, and one or more *.idx",
+    )
+    parser.add_argument("--ibd", type=Path, help="Path to table .ibd (with --idx; default: sibling *.ibd)")
     parser.add_argument(
         "--catalog",
         type=Path,
-        help="Path to catalog.json (default: sibling catalog.json)",
+        help="Path to catalog.json (with --idx; default: sibling catalog.json)",
     )
     parser.add_argument(
         "--index-name",
-        help="Index name in catalog (default: .idx filename stem)",
+        help="Index name in catalog (with --idx; default: .idx filename stem)",
     )
     parser.add_argument(
         "--page-size",
@@ -1022,49 +1349,62 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--out",
         type=Path,
-        help="Output HTML path (default: out/page-graph/<index>.html)",
+        help="Output HTML path (default: out/page-graph/<table|index>.html)",
     )
     args = parser.parse_args(argv)
 
-    idx = args.idx.resolve()
-    if not idx.is_file():
-        print(f"error: idx not found: {idx}", file=sys.stderr)
-        return 1
-
-    guess_catalog, guess_ibd = infer_paths(idx)
-    catalog = (args.catalog or guess_catalog)
-    ibd = (args.ibd or guess_ibd)
-    if catalog is None or not catalog.is_file():
-        print("error: --catalog required (no sibling catalog.json)", file=sys.stderr)
-        return 1
-    if ibd is None or not ibd.is_file():
-        print("error: --ibd required (no sibling *.ibd)", file=sys.stderr)
-        return 1
-    catalog = catalog.resolve()
-    ibd = ibd.resolve()
-
-    out = args.out
-    if out is None:
-        repo_root = Path(__file__).resolve().parents[2]
-        out = repo_root / "out" / "page-graph" / f"{idx.stem}.html"
-    else:
-        out = out.resolve()
+    repo_root = Path(__file__).resolve().parents[2]
 
     try:
-        model = build_model(idx, ibd, catalog, args.index_name, args.page_size)
+        if args.table_dir is not None:
+            table_dir = args.table_dir.resolve()
+            bundle = build_table_bundle(table_dir, args.page_size)
+            out = args.out
+            if out is None:
+                out = repo_root / "out" / "page-graph" / f"{bundle['table']}.html"
+            else:
+                out = out.resolve()
+        else:
+            idx = args.idx.resolve()
+            if not idx.is_file():
+                print(f"error: idx not found: {idx}", file=sys.stderr)
+                return 1
+            guess_catalog, guess_ibd = infer_paths(idx)
+            catalog = args.catalog or guess_catalog
+            ibd = args.ibd or guess_ibd
+            if catalog is None or not catalog.is_file():
+                print("error: --catalog required (no sibling catalog.json)", file=sys.stderr)
+                return 1
+            if ibd is None or not ibd.is_file():
+                print("error: --ibd required (no sibling *.ibd)", file=sys.stderr)
+                return 1
+            catalog = catalog.resolve()
+            ibd = ibd.resolve()
+            model = build_model(idx, ibd, catalog, args.index_name, args.page_size)
+            bundle = model_to_bundle(model)
+            out = args.out
+            if out is None:
+                out = repo_root / "out" / "page-graph" / f"{idx.stem}.html"
+            else:
+                out = out.resolve()
     except PageError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    write_html(model, out)
-    leaf_count = sum(1 for n in model["nodes"] if n["kind"] == "LEAF")
-    entry_count = sum(len(v["entries"]) for v in model["leaves"].values())
+    write_html(bundle, out)
     print(f"wrote {out}")
     print(
-        f"  pageSize={model['source'].get('pageSize')} "
-        f"index={model['schema']['indexName']} height={model['meta'].get('height')} "
-        f"leaves={leaf_count} entries={entry_count} heap_pages={len(model['heapPages'])}"
+        f"  table={bundle.get('table')} indexes={len(bundle.get('indexes') or [])} "
+        f"heap_pages={len(bundle.get('heapPages') or {})}"
     )
+    for ix in bundle.get("indexes") or []:
+        leaf_count = sum(1 for n in ix["nodes"] if n["kind"] == "LEAF")
+        entry_count = sum(len(v["entries"]) for v in ix["leaves"].values())
+        print(
+            f"  - {ix['id']}: height={ix['meta'].get('height')} "
+            f"leaves={leaf_count} entries={entry_count} "
+            f"pageSize={ix['source'].get('pageSize')}"
+        )
     return 0
 
 

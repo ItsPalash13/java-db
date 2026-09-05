@@ -2,8 +2,9 @@
 
 Offline Python tool that reads JavaDatabase page files and writes an **interactive HTML** graph.
 
-- **Left:** B+ tree from a `.idx` — internal root fans out to leaf children (solid arrows); dashed `nextLeaf` edges link sibling leaves left→right on the same row. HEAP nodes stay off the canvas until you click an entry.
-- **Right:** Click a **LEAF**, then an **entry row**, to open that heap page and highlight the Rid slot / row.
+- **Left:** B+ tree — internal root fans out to leaf children (solid); dashed `nextLeaf` links siblings left→right. HEAP nodes appear only when you follow a Rid.
+- **Right:** Click a **LEAF**, then a **key row**, to see the **selected heap row** (all columns) plus heap page chips (page id, free bytes, slots, live) and the full page table.
+- **Tabs (top-right):** one tab per `.idx` when you pass a table directory.
 
 Disk image only — run `CHECKPOINT` or stop the server first if you need a consistent dump.
 
@@ -13,21 +14,21 @@ Python 3.10+ (stdlib only). The HTML loads [vis-network](https://visjs.github.io
 
 ## Usage
 
-From the repo root:
+**All indexes for a table** (recommended):
 
 ```bash
-python tools/page-graph/page_graph.py --idx data/shop/users/idx_orders_user.idx
+python tools/page-graph/page_graph.py --table-dir data/shop/users --out out/page-graph/users.html
 ```
 
-Sibling `catalog.json` and `*.ibd` are inferred when present. Explicit flags:
+Discovers `catalog.json`, `*.ibd`, and every `*.idx` under that directory.
+
+**Single index:**
 
 ```bash
-python tools/page-graph/page_graph.py \
-  --idx data/shop/users/idx_orders_user.idx \
-  --ibd data/shop/users/users.ibd \
-  --catalog data/shop/users/catalog.json \
-  --out out/page-graph/idx_orders_user.html
+python tools/page-graph/page_graph.py --idx data/shop/users/idx_users_name.idx
 ```
+
+Sibling `catalog.json` and `*.ibd` are inferred when present.
 
 Then open the HTML file in a browser.
 
@@ -44,4 +45,4 @@ Matches the Java codecs:
 | Leaf entry | key bytes + Rid `(pageId:i32, slotId:i32)` |
 | Internal entry | separator key + child `pageId:i32` |
 
-Key and row types come from `catalog.json`. The HTML canvas shows the **B+ tree only**; click a leaf entry to open the heap row in the side panel (one Rid edge is drawn for that entry).
+Key and row types come from `catalog.json`.
