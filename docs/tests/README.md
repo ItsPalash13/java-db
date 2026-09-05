@@ -48,3 +48,21 @@ Wipes `test/data`, starts the server with `PAGE_SIZE=8192` and
 can reuse frames), a final `CHECKPOINT`, then `out/page-graph/users.html`.
 Override: `DATA_DIR`, `PORT`, `PAGE_SIZE`, `INDEX_KEY_PADDING_BYTES`, `BUFFER_POOL_FRAMES`,
 `TABLE_DIR`, `OUT_HTML`.
+
+## WAL crash recovery
+
+**JUnit (in-process):** abandon the engine without `stop()`/`flushAll`, then start a new
+engine on the same dir and assert `SELECT *` equals the committed oracle.
+
+```powershell
+mvn -pl database-server -Dtest=WalCrashRecoveryLoopTest test
+```
+
+**Process kill (MSYS2 bash — not WSL `bash`):** load churn over TCP → `kill -9` → restart →
+verify. Uses `com.example.client.WalCrashHarness`.
+
+```powershell
+C:\msys64\usr\bin\bash.exe test-scripts/wal_crash_verify.sh
+```
+
+Override: `DATA_DIR` (default `test/wal-crash`), `PORT` (default `9091`), `SEED`.

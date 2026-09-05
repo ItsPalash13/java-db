@@ -1367,6 +1367,13 @@ DatabaseClient
 + close()
 
 <<concrete>>
+WalCrashHarness
++ main(args: String[]): void
++ load(host, port, seed, expectedPath): int
++ verify(host, port, seed, expectedPath): int
+    // scripts/wal_crash_verify.sh — TCP churn oracle + SELECT after kill -9
+
+<<concrete>>
 ClientConnection (client module)
 + send(request: String)
 + receive(): String
@@ -1436,7 +1443,7 @@ DefaultQueryParser dispatches via ParserRegistry; statement parsers own grammar;
 DatabaseServer passes QueryProcessor into NetworkModule; NetworkModule assigns it to RequestHandler.
 RequestHandler bridges network and query processor (JSON wire responses via JsonWireResponse).
 java.net.Socket classes stay inside the TCP implementations.
-database-client is a separate Maven module: DatabaseClient REPL over the same length-prefixed TCP framing; parses JSON with client.wire.WireResponseJson, prints via ResponsePrinter. Not wired from Main/StorageEngine.
+database-client is a separate Maven module: DatabaseClient REPL over the same length-prefixed TCP framing; parses JSON with client.wire.WireResponseJson, prints via ResponsePrinter. WalCrashHarness (load/verify) supports scripts/wal_crash_verify.sh force-kill recovery checks. Not wired from Main/StorageEngine.
 
 Catalog (Phase 1.1–1.3):
 CatalogManager is a StorageEngine submodule and owns CatalogStore.

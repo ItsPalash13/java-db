@@ -13,6 +13,11 @@
     <artifactId>database-client</artifactId>
     <name>Database Client</name>
 
+    <properties>
+        <!-- Override for tools: -Dclient.mainClass=com.example.client.WalCrashHarness -->
+        <client.mainClass>com.example.client.Main</client.mainClass>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -29,7 +34,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>com.example.client.Main</mainClass>
+                            <mainClass>${client.mainClass}</mainClass>
                         </manifest>
                     </archive>
                 </configuration>
@@ -39,7 +44,7 @@
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.5.0</version>
                 <configuration>
-                    <mainClass>com.example.client.Main</mainClass>
+                    <mainClass>${client.mainClass}</mainClass>
                     <!-- Without this, exec:java may not attach stdin/stdout for the REPL prompt. -->
                     <interactive>true</interactive>
                 </configuration>
