@@ -334,10 +334,17 @@ public final class FileIndexStore implements IndexStore {
             return live;
         });
         int mid = entries.size() / 2;
+        // Right half is a new page; stitch the leaf linked list: left → right → former successor.
+        int oldNext = withShared(file, pageId, frame -> BTreeLeafPage.wrap(frame.data()).nextLeafPageId());
         rewriteLeaf(file, pageId, entries.subList(0, mid));
         int rightPageId = allocatePage(file, PageType.INDEX_LEAF);
         rewriteLeaf(file, rightPageId, entries.subList(mid, entries.size()));
         linkLeaves(file, pageId, rightPageId);
+        withExclusive(file, rightPageId, (FrameCallback<Void>) frame -> {
+            BTreeLeafPage.wrap(frame.data()).setNextLeafPageId(oldNext);
+            bufferPool.markDirty(frame);
+            return null;
+        });
         byte[] separator = entries.get(mid).keyBytes();
         return new SplitResult(pageId, separator, rightPageId);
     }
@@ -388,12 +395,15 @@ public final class FileIndexStore implements IndexStore {
 
     private void rewriteLeaf(String file, int pageId, List<BTreeLeafPage.LeafEntry> entries) {
         withExclusive(file, pageId, (FrameCallback<Void>) frame -> {
+            // Preserve sibling link across content rewrite (borrow/split left half).
+            int nextLeaf = BTreeLeafPage.wrap(frame.data()).nextLeafPageId();
             BTreeLeafPage fresh = BTreeLeafPage.createEmpty(pageId, pageSize);
             System.arraycopy(fresh.data(), 0, frame.data(), 0, pageSize);
             BTreeLeafPage page = BTreeLeafPage.wrap(frame.data());
             for (BTreeLeafPage.LeafEntry entry : entries) {
                 page.insertAt(page.slotCount(), entry.keyBytes(), entry.rid());
             }
+            page.setNextLeafPageId(nextLeaf);
             bufferPool.markDirty(frame);
             return null;
         });
@@ -606,6 +616,11 @@ public final class FileIndexStore implements IndexStore {
         return Math.max(1, count / 2);
     }
 
+    /**
+     * Underflow repair for a leaf: borrow or merge only with siblings that share the same parent.
+     * {@code nextLeaf} neighbors are for range scans — merging across a parent boundary would move
+     * keys into a leaf under the wrong internal separator and make equality lookup miss them.
+     */
     private void rebalanceAfterLeafDelete(
             String file,
             int rootPageId,
@@ -618,44 +633,35 @@ public final class FileIndexStore implements IndexStore {
         if (live >= min) {
             return;
         }
-        int rightSibling = withShared(file, leafPageId, frame -> BTreeLeafPage.wrap(frame.data()).nextLeafPageId());
-        if (rightSibling >= 0 && tryBorrowFromRightLeaf(file, rootPageId, height, leafPageId, rightSibling, types, min)) {
+        // Single leaf root: nothing to borrow/merge with.
+        if (height == 1) {
             return;
         }
-        Integer leftSibling = findLeftLeafSibling(file, rootPageId, height, leafPageId);
-        if (leftSibling != null && tryBorrowFromRightLeaf(file, rootPageId, height, leftSibling, leafPageId, types, min)) {
+        ParentRef parent = findParentOfLeaf(file, rootPageId, height, leafPageId);
+        if (parent == null) {
             return;
         }
-        if (rightSibling >= 0) {
-            mergeLeaves(file, rootPageId, height, leafPageId, rightSibling, types);
+        // Same-parent siblings only (not nextLeaf linked-list neighbors).
+        InternalSiblings siblings = findInternalSiblings(file, parent.pageId(), leafPageId);
+        if (siblings.rightPageId >= 0
+                && tryBorrowFromRightLeaf(file, rootPageId, height, leafPageId, siblings.rightPageId, types, min)) {
             return;
         }
-        if (leftSibling != null) {
-            mergeLeaves(file, rootPageId, height, leftSibling, leafPageId, types);
+        if (siblings.leftPageId >= 0
+                && tryBorrowFromRightLeaf(file, rootPageId, height, siblings.leftPageId, leafPageId, types, min)) {
+            return;
+        }
+        if (siblings.rightPageId >= 0) {
+            mergeLeaves(file, rootPageId, height, leafPageId, siblings.rightPageId, types);
+            return;
+        }
+        if (siblings.leftPageId >= 0) {
+            mergeLeaves(file, rootPageId, height, siblings.leftPageId, leafPageId, types);
         }
     }
 
     private int liveLeafCount(String file, int leafPageId, ColumnType[] types) {
         return withShared(file, leafPageId, frame -> BTreeLeafPage.wrap(frame.data()).liveEntries(types).size());
-    }
-
-    private Integer findLeftLeafSibling(String file, int rootPageId, int height, int leafPageId) {
-        List<Integer> leaves = new ArrayList<>();
-        collectLeafChain(file, findLeftmostLeaf(file, rootPageId, height), leaves);
-        for (int i = 1; i < leaves.size(); i++) {
-            if (leaves.get(i) == leafPageId) {
-                return leaves.get(i - 1);
-            }
-        }
-        return null;
-    }
-
-    private void collectLeafChain(String file, int startLeaf, List<Integer> out) {
-        int current = startLeaf;
-        while (current >= 0) {
-            out.add(current);
-            current = withShared(file, current, frame -> BTreeLeafPage.wrap(frame.data()).nextLeafPageId());
-        }
     }
 
     private boolean tryBorrowFromRightLeaf(

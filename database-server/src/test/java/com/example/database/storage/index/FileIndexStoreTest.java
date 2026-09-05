@@ -72,6 +72,43 @@ class FileIndexStoreTest {
         assertEquals(new Rid(0, keys.indexOf(7)), hits.get(3));
     }
 
+    /**
+     * Leaf splits must keep {@code nextLeaf}: left → newRight → formerSuccessor.
+     * A broken chain makes {@link FileIndexStore#lookupRange} miss keys after the first split.
+     */
+    @Test
+    void leafNextLinksSurviveManySplitsForFullRangeScan() {
+        java.util.ArrayList<Integer> keys = new java.util.ArrayList<>();
+        for (int i = 0; i < 200; i++) {
+            keys.add(i);
+        }
+        java.util.Collections.shuffle(keys, new java.util.Random(42));
+        for (int key : keys) {
+            store.insert("shop", "users", "idx_users_id", new Object[]{key}, new Rid(1, key));
+        }
+
+        IndexRange all = new IndexRange(null, true, null, true, 1);
+        List<Rid> hits = collect(store.lookupRange("shop", "users", "idx_users_id", all));
+        assertEquals(200, hits.size(), "range scan must see every key via nextLeaf chain");
+        for (int i = 0; i < 200; i++) {
+            assertEquals(new Rid(1, i), hits.get(i), "keys must appear in sorted order at index " + i);
+        }
+
+        pool.flushAll();
+        FileIndexStore reopened = new FileIndexStore(pool, storage);
+        reopened.registerKeyTypes(
+                "shop",
+                "users",
+                IndexMetadata.define("idx_users_id", List.of(1)),
+                new ColumnType[]{ColumnType.INT}
+        );
+        List<Rid> afterFlush = collect(reopened.lookupRange("shop", "users", "idx_users_id", all));
+        assertEquals(200, afterFlush.size());
+        for (int i = 0; i < 200; i++) {
+            assertEquals(new Rid(1, i), afterFlush.get(i));
+        }
+    }
+
     @Test
     void deleteRemovesMatchingRidOnly() {
         ColumnType[] types = {ColumnType.INT};

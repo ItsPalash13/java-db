@@ -726,7 +726,7 @@ owns on-disk B+ tree indexes ({indexName}.idx)
 + delete(database, table, indexName, key, rid)
 + lookupEquals(database, table, indexName, key): Iterator<Rid>
 + lookupRange(database, table, indexName, range: IndexRange): Iterator<Rid>
-    // leaf sibling walk via nextLeafPageId; IndexRange carries prefix bounds
+    // range scan walks nextLeafPageId; IndexRange carries prefix bounds
 
 
 <<record>>
@@ -747,6 +747,8 @@ IndexPageWal
 <<concrete>>
 FileIndexStore implements IndexStore
 - bufferPool, physicalStorage, keyTypesByIndex, uniqueByIndex
+    // leaf split stitches nextLeaf (left→right→oldNext); rewriteLeaf preserves nextLeaf
+    // leaf borrow/merge uses same-parent siblings only (not nextLeaf neighbors)
     // page 0 INDEX_META; bulkLoadSorted; delete merge/borrow for leaf + internal (rebalanceInternalAfterDelete cascade); unique enforcement
 
 
