@@ -1,6 +1,7 @@
 target/
 /data/
 /data-test/
+/test/
 .idea/
 *.iml
 .classpath
@@ -14,3 +15,4 @@ temp
 start.txt
 
 out/
+input/
