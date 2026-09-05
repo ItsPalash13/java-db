@@ -66,3 +66,16 @@ C:\msys64\usr\bin\bash.exe test-scripts/wal_crash_verify.sh
 ```
 
 Override: `DATA_DIR` (default `test/wal-crash`), `PORT` (default `9091`), `SEED`.
+
+## Mixed multi-client crash + page graph (v1)
+
+MSYS2 bash (not WSL). One DDL/CHECKPOINT client + three DML/DQL clients across
+`shop` / `inventory` (two tables each). After `kill -9` and restart, SELECT is checked
+against a committed oracle, then a final CHECKPOINT and page-graph HTML for `shop.users`.
+
+```powershell
+C:\msys64\usr\bin\bash.exe test-scripts/mixed_crash_page_graph.sh
+```
+
+Override: `SEED`, `TOTAL_OPS` (default 10000), `PORT` (9092), `DATA_DIR`, `BUFFER_POOL_FRAMES`,
+`OUT_HTML`.

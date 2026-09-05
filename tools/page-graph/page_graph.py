@@ -929,6 +929,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
       }
 
+      // vis-network requires every node to have a level once any level is set.
+      // Orphan .idx pages (empty leaves / internals left after DROP INDEX churn) are
+      // unreachable from root — park them below the live tree instead of omitting level.
+      let maxLevel = 0;
+      for (const lv of Object.values(levels)) {
+        if (lv > maxLevel) maxLevel = lv;
+      }
+      for (const n of nodesArr) {
+        if (levels[n.id] === undefined) {
+          if (n.kind === "INTERNAL") {
+            levels[n.id] = Math.max(maxLevel, hasMeta ? 1 : 0);
+          } else {
+            levels[n.id] = maxLevel + 1;
+          }
+        }
+      }
+
       const leafNodes = nodesArr.filter(n => n.kind === "LEAF");
       const nextTargets = new Set();
       for (const info of Object.values(leaves)) {
@@ -992,6 +1009,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const info = DATA.heapPages[String(pageId)];
       const live = info ? info.slots.filter(s => s.live).length : 0;
       const free = info ? info.free : -1;
+      // Hierarchical layout forbids mixing leveled + unleveled nodes.
+      let maxLevel = 0;
+      for (const existingId of nodes.getIds()) {
+        const lv = nodes.get(existingId)?.level;
+        if (typeof lv === "number" && lv > maxLevel) maxLevel = lv;
+      }
       nodes.add({
         id,
         label: `HEAP p${pageId}\n${live} live · free ${free}`,
@@ -1002,7 +1025,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         margin: 10,
         kind: "HEAP",
         pageId,
-        level: 4,
+        level: maxLevel + 1,
       });
       return id;
     }

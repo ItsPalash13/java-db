@@ -8,6 +8,7 @@ import com.example.database.processor.executor.CheckpointExecutor;
 import com.example.database.processor.executor.CommandExecutor;
 import com.example.database.processor.executor.DescribeExecutor;
 import com.example.database.processor.executor.ExecutionException;
+import com.example.database.storage.bufferpool.BufferPoolException;
 import com.example.database.storage.index.IndexStoreException;
 import com.example.database.storage.page.PageLayoutException;
 import com.example.database.processor.executor.ExecutorRegistry;
@@ -139,6 +140,11 @@ public final class DefaultQueryProcessor implements QueryProcessor {
             // Concurrent schema / codec mismatch (e.g. value count vs columns).
             String error = "ERROR: " + e.getMessage();
             System.out.println("[QueryProcessor] page layout error: " + error);
+            return QueryResult.error(error);
+        } catch (BufferPoolException e) {
+            // No-steal: dirty pages fill the pool until CHECKPOINT/flushAll — return ERROR, keep the TCP session.
+            String error = "ERROR: " + e.getMessage();
+            System.out.println("[QueryProcessor] buffer pool error: " + error);
             return QueryResult.error(error);
         }
     }

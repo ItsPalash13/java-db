@@ -96,8 +96,19 @@ public final class TcpNetworkModule implements NetworkModule {
             while (running.get()) {
                 Request request = connection.receive();
                 System.out.println("[NetworkModule] received request, dispatching to RequestHandler");
-                Response response = requestHandler.handle(request);
-                connection.send(response);
+                try {
+                    Response response = requestHandler.handle(request);
+                    connection.send(response);
+                } catch (RuntimeException e) {
+                    // Keep the TCP session up: uncaught storage errors used to close the socket (client EOF).
+                    System.err.println("[NetworkModule] handler error: " + e);
+                    e.printStackTrace(System.err);
+                    connection.send(new JsonWireResponse(
+                            com.example.database.processor.executor.QueryResult
+                                    .error("ERROR: " + e.getMessage())
+                                    .toWireResponse()
+                    ));
+                }
             }
         } catch (IOException ignored) {
             // Peer closed or socket closed during stop().
