@@ -16,7 +16,6 @@ import java.util.Iterator;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FileIndexStoreTest {
 
@@ -30,6 +29,7 @@ class FileIndexStoreTest {
     private DefaultPhysicalStorage storage;
 
     @BeforeEach
+    @SuppressWarnings("unused") // invoked by JUnit
     void setUp() {
         DataDirectory dataDirectory = new DataDirectory(tempDir.resolve("store"));
         dataDirectory.ensureExists();
@@ -43,7 +43,6 @@ class FileIndexStoreTest {
 
     @Test
     void insertLookupSplitAndSurviveFlush() {
-        ColumnType[] types = {ColumnType.INT};
         for (int i = 0; i < 40; i++) {
             store.insert("shop", "users", "idx_users_id", new Object[]{i}, new Rid(0, i));
         }
@@ -53,14 +52,18 @@ class FileIndexStoreTest {
 
         pool.flushAll();
         FileIndexStore reopened = new FileIndexStore(pool, storage);
-        reopened.registerKeyTypes("shop", "users", IndexMetadata.define("idx_users_id", List.of(1)), types);
+        reopened.registerKeyTypes(
+                "shop",
+                "users",
+                IndexMetadata.define("idx_users_id", List.of(1)),
+                new ColumnType[]{ColumnType.INT}
+        );
         List<Rid> afterFlush = collect(reopened.lookupEquals("shop", "users", "idx_users_id", new Object[]{17}));
         assertEquals(1, afterFlush.size());
     }
 
     @Test
     void lookupRangeReturnsSortedKeysAcrossLeaves() {
-        ColumnType[] types = {ColumnType.INT};
         List<Integer> keys = List.of(5, 1, 9, 3, 7, 2, 8, 4, 6);
         for (int i = 0; i < keys.size(); i++) {
             store.insert("shop", "users", "idx_users_id", new Object[]{keys.get(i)}, new Rid(0, i));
@@ -111,7 +114,6 @@ class FileIndexStoreTest {
 
     @Test
     void deleteRemovesMatchingRidOnly() {
-        ColumnType[] types = {ColumnType.INT};
         store.insert("shop", "users", "idx_users_id", new Object[]{7}, new Rid(1, 0));
         store.insert("shop", "users", "idx_users_id", new Object[]{7}, new Rid(1, 1));
         store.delete("shop", "users", "idx_users_id", new Object[]{7}, new Rid(1, 0));

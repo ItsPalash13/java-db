@@ -1,7 +1,6 @@
 package com.example.database.storage.bufferpool;
 
 import com.example.database.storage.index.EmptyPageFactory;
-import com.example.database.storage.page.HeapPage;
 import com.example.database.storage.page.PageLayout;
 import com.example.database.storage.page.PageType;
 import com.example.database.storage.physical.PhysicalStorage;

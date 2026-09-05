@@ -18,7 +18,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Consumer;
 
 /**
  * On-disk B+ tree index store: one {@code .idx} file per catalog index.
@@ -483,10 +482,6 @@ public final class FileIndexStore implements IndexStore {
         return current;
     }
 
-    private void deleteFromLeaf(String file, int pageId, byte[] keyBytes, Rid rid, ColumnType[] types) {
-        removeFromLeaf(file, pageId, keyBytes, rid, types);
-    }
-
     private boolean removeFromLeaf(String file, int pageId, byte[] keyBytes, Rid rid, ColumnType[] types) {
         return Boolean.TRUE.equals(withExclusive(file, pageId, frame -> {
             BTreeLeafPage page = BTreeLeafPage.wrap(frame.data());
@@ -705,7 +700,7 @@ public final class FileIndexStore implements IndexStore {
         leftEntries.add(moved);
         rewriteLeaf(file, leftLeaf, leftEntries);
         rewriteLeaf(file, rightLeaf, rightEntries);
-        updateParentSeparatorForRightLeaf(file, rootPageId, height, rightLeaf, rightEntries, types);
+        updateParentSeparatorForRightLeaf(file, rootPageId, height, rightLeaf, rightEntries);
         return true;
     }
 
@@ -718,8 +713,7 @@ public final class FileIndexStore implements IndexStore {
             int rootPageId,
             int height,
             int rightLeaf,
-            List<BTreeLeafPage.LeafEntry> rightEntries,
-            ColumnType[] types
+            List<BTreeLeafPage.LeafEntry> rightEntries
     ) {
         if (height == 1 || rightEntries.isEmpty()) {
             return;
@@ -840,12 +834,12 @@ public final class FileIndexStore implements IndexStore {
         InternalSiblings siblings = findInternalSiblings(file, parent.pageId(), internalPageId);
         // Try borrow from right sibling.
         if (siblings.rightPageId >= 0
-                && tryBorrowFromRightInternal(file, parent, internalPageId, siblings.rightPageId, types)) {
+                && tryBorrowFromRightInternal(file, parent, internalPageId, siblings.rightPageId)) {
             return;
         }
         // Try borrow from left sibling.
         if (siblings.leftPageId >= 0
-                && tryBorrowFromLeftInternal(file, parent, siblings.leftPageId, internalPageId, types)) {
+                && tryBorrowFromLeftInternal(file, parent, siblings.leftPageId, internalPageId)) {
             return;
         }
         // Merge with right sibling.
@@ -865,7 +859,7 @@ public final class FileIndexStore implements IndexStore {
      */
     private boolean tryBorrowFromRightInternal(
             String file, ParentRef parent,
-            int leftPageId, int rightPageId, ColumnType[] types) {
+            int leftPageId, int rightPageId) {
         List<BTreeInternalPage.InternalEntry> rightEntries = readLiveInternalEntries(file, rightPageId);
         if (rightEntries.size() <= 1) {
             return false; // right sibling would underflow
@@ -903,7 +897,7 @@ public final class FileIndexStore implements IndexStore {
      */
     private boolean tryBorrowFromLeftInternal(
             String file, ParentRef parent,
-            int leftPageId, int rightPageId, ColumnType[] types) {
+            int leftPageId, int rightPageId) {
         List<BTreeInternalPage.InternalEntry> leftEntries = readLiveInternalEntries(file, leftPageId);
         if (leftEntries.size() <= 1) {
             return false;

@@ -81,7 +81,11 @@ class ServerEnvironmentTest {
                 "PAGE_SIZE=8\n"
         );
 
-        assertThrows(IllegalArgumentException.class, () -> ServerEnvironment.load(dataDirectory));
+        IllegalArgumentException thrown = assertThrows(
+                IllegalArgumentException.class,
+                () -> ServerEnvironment.load(dataDirectory)
+        );
+        assertTrue(thrown.getMessage().contains("PAGE_SIZE"));
     }
 
     @Test
@@ -93,7 +97,11 @@ class ServerEnvironmentTest {
                 "BUFFER_POOL_FRAMES=0\n"
         );
 
-        assertThrows(IllegalArgumentException.class, () -> ServerEnvironment.load(dataDirectory));
+        IllegalArgumentException thrown = assertThrows(
+                IllegalArgumentException.class,
+                () -> ServerEnvironment.load(dataDirectory)
+        );
+        assertTrue(thrown.getMessage().contains("BUFFER_POOL_FRAMES"));
     }
 
     @Test

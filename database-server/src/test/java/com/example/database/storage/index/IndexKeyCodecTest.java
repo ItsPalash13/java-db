@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class IndexKeyCodecTest {
 
     @AfterEach
+    @SuppressWarnings("unused") // invoked by JUnit
     void resetPadding() {
         IndexKeyCodec.setKeyPaddingBytes(0);
     }

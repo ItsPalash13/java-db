@@ -1,5 +1,9 @@
 package com.example.database.processor;
 
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Objects;
+
 import com.example.database.processor.analyser.AnalysisException;
 import com.example.database.processor.analyser.AnalyzedQuery;
 import com.example.database.processor.analyser.DefaultQueryAnalyser;
@@ -8,9 +12,6 @@ import com.example.database.processor.executor.CheckpointExecutor;
 import com.example.database.processor.executor.CommandExecutor;
 import com.example.database.processor.executor.DescribeExecutor;
 import com.example.database.processor.executor.ExecutionException;
-import com.example.database.storage.bufferpool.BufferPoolException;
-import com.example.database.storage.index.IndexStoreException;
-import com.example.database.storage.page.PageLayoutException;
 import com.example.database.processor.executor.ExecutorRegistry;
 import com.example.database.processor.executor.QueryDispatcher;
 import com.example.database.processor.executor.QueryResult;
@@ -32,13 +33,11 @@ import com.example.database.processor.planner.UnresolvedPlan;
 import com.example.database.storage.DataDirectory;
 import com.example.database.storage.DefaultStorageEngine;
 import com.example.database.storage.StorageEngine;
-import com.example.database.storage.lock.CatalogLockException;
+import com.example.database.storage.bufferpool.BufferPoolException;
+import com.example.database.storage.index.IndexStoreException;
 import com.example.database.storage.lock.LockException;
+import com.example.database.storage.page.PageLayoutException;
 import com.example.database.storage.transaction.TransactionManager;
-
-import java.nio.file.Path;
-import java.util.List;
-import java.util.Objects;
 
 /**
  * Lex → parse → analyse → plan → execute. DDL writes the catalog; DESCRIBE/SHOW read it.

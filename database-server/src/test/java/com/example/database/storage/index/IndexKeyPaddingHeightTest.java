@@ -27,6 +27,7 @@ class IndexKeyPaddingHeightTest {
     Path tempDir;
 
     @AfterEach
+    @SuppressWarnings("unused") // invoked by JUnit
     void resetPadding() {
         IndexKeyCodec.setKeyPaddingBytes(0);
     }
@@ -53,21 +54,12 @@ class IndexKeyPaddingHeightTest {
         assertEquals(new Rid(1, 577), hit.get(0));
 
         // Height should exceed 2 with pad=256 @ 8 KiB (root must split).
-        int height = readHeight(store, pool, storage);
+        int height = readHeight(pool);
         assertTrue(height >= 3, "expected height >= 3, got " + height);
     }
 
-    private static int readHeight(FileIndexStore store, DefaultBufferPool pool, DefaultPhysicalStorage storage) {
-        // Re-open meta via a fresh store sharing the same files.
-        FileIndexStore reopened = new FileIndexStore(pool, storage, 256);
-        reopened.registerKeyTypes(
-                "shop",
-                "users",
-                IndexMetadata.define("idx_users_name", List.of(1)),
-                new ColumnType[]{ColumnType.VARCHAR}
-        );
-        // Probe through package-visible path: lookup forces readMeta; use reflection-free
-        // approach — pin meta page 0 directly.
+    private static int readHeight(DefaultBufferPool pool) {
+        // Pin meta page 0 directly.
         var frame = pool.pin(new com.example.database.storage.bufferpool.PageId(
                 IndexFiles.idxPath("shop", "users", "idx_users_name"), 0));
         try {

@@ -66,7 +66,7 @@ public final class DefaultStorageEngine implements StorageEngine {
         this.walManager = new DefaultWALManager(physicalStorage);
         // Frame count from server.env — not on-disk; raise for fat-key demos under no-steal.
         this.bufferPool = new DefaultBufferPool(physicalStorage, environment.bufferPoolFrames());
-        IndexPageWal indexPageWal = new IndexPageWal(physicalStorage);
+        this.indexPageWal = new IndexPageWal(physicalStorage);
         if (bufferPool instanceof DefaultBufferPool defaultBufferPool) {
             defaultBufferPool.setPageFlushHook(indexPageWal::logPageWrite);
             defaultBufferPool.setWalManager(walManager);
@@ -102,7 +102,6 @@ public final class DefaultStorageEngine implements StorageEngine {
                 bufferPool
         );
         this.fileTableStore = heap;
-        this.indexPageWal = indexPageWal;
     }
 
     @Override

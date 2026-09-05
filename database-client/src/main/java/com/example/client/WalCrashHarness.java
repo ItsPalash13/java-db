@@ -116,7 +116,7 @@ public final class WalCrashHarness {
                 continue;
             }
             String[] parts = line.split("\t", 2);
-            expected.add(List.of(Integer.parseInt(parts[0]), parts[1]));
+            expected.add(List.of(Integer.valueOf(parts[0]), parts[1]));
         }
         expected.sort(Comparator.comparingInt(row -> (Integer) row.get(0)));
 

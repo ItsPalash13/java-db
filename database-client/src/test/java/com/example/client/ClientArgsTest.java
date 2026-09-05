@@ -41,7 +41,10 @@ class ClientArgsTest {
 
     @Test
     void scriptRequiresOut() {
-        assertThrows(IllegalArgumentException.class,
-                () -> ClientArgs.parse(new String[]{"--script", "in.txt"}));
+        IllegalArgumentException thrown = assertThrows(
+                IllegalArgumentException.class,
+                () -> ClientArgs.parse(new String[]{"--script", "in.txt"})
+        );
+        assertEquals("--script requires --out", thrown.getMessage());
     }
 }

@@ -253,20 +253,20 @@ public final class IndexKeyCodec {
             }
             return l.intValue();
         }
-        throw new PageLayoutException("expected INT, got " + value.getClass().getSimpleName());
+        throw new PageLayoutException("expected INT, got " + (value == null ? "null" : value.getClass().getSimpleName()));
     }
 
     private static boolean asBoolean(Object value) {
         if (value instanceof Boolean b) {
             return b;
         }
-        throw new PageLayoutException("expected BOOLEAN, got " + value.getClass().getSimpleName());
+        throw new PageLayoutException("expected BOOLEAN, got " + (value == null ? "null" : value.getClass().getSimpleName()));
     }
 
     private static String asString(Object value) {
         if (value instanceof String s) {
             return s;
         }
-        throw new PageLayoutException("expected VARCHAR, got " + value.getClass().getSimpleName());
+        throw new PageLayoutException("expected VARCHAR, got " + (value == null ? "null" : value.getClass().getSimpleName()));
     }
 }

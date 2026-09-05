@@ -159,11 +159,8 @@ public final class MixedCrashHarness {
                                 // Workers 1..3 → owner slots 0..2 for UPDATE/DELETE partitioning.
                                 runWorkerOp(client, rnd, oracles, nextId, clientId - 1);
                             }
-                        } catch (IOException e) {
-                            failure.compareAndSet(null, e);
-                            quietBarrier.reset();
-                            break;
-                        } catch (Exception e) {
+                        } catch (IOException | InterruptedException | java.util.concurrent.BrokenBarrierException
+                                 | java.util.concurrent.TimeoutException e) {
                             failure.compareAndSet(null, e);
                             quietBarrier.reset();
                             break;
@@ -562,12 +559,12 @@ public final class MixedCrashHarness {
             }
             String[] parts = line.split("\t", -1);
             if (parts.length == 2) {
-                rows.add(List.of(Integer.parseInt(parts[0]), parts[1]));
+                rows.add(List.of(Integer.valueOf(parts[0]), parts[1]));
             } else if (parts.length == 3) {
                 rows.add(List.of(
-                        Integer.parseInt(parts[0]),
-                        Integer.parseInt(parts[1]),
-                        Integer.parseInt(parts[2])
+                        Integer.valueOf(parts[0]),
+                        Integer.valueOf(parts[1]),
+                        Integer.valueOf(parts[2])
                 ));
             }
         }
