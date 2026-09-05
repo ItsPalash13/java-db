@@ -5,6 +5,8 @@ import com.example.database.storage.checkpoint.CheckpointStrategy;
 import com.example.database.storage.checkpoint.CheckpointStrategyKind;
 import com.example.database.storage.checkpoint.TimeoutCheckpointStrategy;
 import com.example.database.storage.checkpoint.WalSizeCheckpointStrategy;
+import com.example.database.storage.page.PageLayout;
+import com.example.database.storage.physical.DefaultPhysicalStorage;
 import com.example.database.storage.physical.PhysicalStorage;
 
 import java.io.IOException;
@@ -38,12 +40,19 @@ public final class ServerEnvironment {
     public static final String CHECKPOINT_STRATEGY = "CHECKPOINT_STRATEGY";
     public static final String CHECKPOINT_TIMEOUT_SECONDS = "CHECKPOINT_TIMEOUT_SECONDS";
     public static final String MAX_WAL_SIZE_BYTES = "MAX_WAL_SIZE_BYTES";
+    /**
+     * Fixed byte length of every {@code .ibd} / {@code .idx} page. Must match the size
+     * used when those files were written — wrong values fail startup validation.
+     */
+    public static final String PAGE_SIZE = "PAGE_SIZE";
 
     public static final int DEFAULT_CATALOG_LOCK_WAIT_SECONDS = 30;
     /** Five minutes — learning default; operators shorten for demos. */
     public static final int DEFAULT_CHECKPOINT_TIMEOUT_SECONDS = 300;
     public static final long DEFAULT_MAX_WAL_SIZE_BYTES = 16L * 1024 * 1024;
     public static final CheckpointStrategyKind DEFAULT_CHECKPOINT_STRATEGY = CheckpointStrategyKind.TIMEOUT;
+    /** Same default as {@link DefaultPhysicalStorage#DEFAULT_PAGE_SIZE}. */
+    public static final int DEFAULT_PAGE_SIZE = DefaultPhysicalStorage.DEFAULT_PAGE_SIZE;
 
     private static final List<String> DEFAULT_FILE_LINES = List.of(
             "# Auto-generated server settings. Edit values or override with environment variables.",
@@ -51,7 +60,8 @@ public final class ServerEnvironment {
             CHECKPOINT_ENABLED + "=true",
             CHECKPOINT_STRATEGY + "=timeout",
             CHECKPOINT_TIMEOUT_SECONDS + "=" + DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
-            MAX_WAL_SIZE_BYTES + "=" + DEFAULT_MAX_WAL_SIZE_BYTES
+            MAX_WAL_SIZE_BYTES + "=" + DEFAULT_MAX_WAL_SIZE_BYTES,
+            PAGE_SIZE + "=" + DEFAULT_PAGE_SIZE
     );
 
     private final Duration catalogLockWait;
@@ -59,19 +69,22 @@ public final class ServerEnvironment {
     private final CheckpointStrategyKind checkpointStrategyKind;
     private final Duration checkpointTimeout;
     private final long maxWalSizeBytes;
+    private final int pageSize;
 
     private ServerEnvironment(
             Duration catalogLockWait,
             boolean checkpointEnabled,
             CheckpointStrategyKind checkpointStrategyKind,
             Duration checkpointTimeout,
-            long maxWalSizeBytes
+            long maxWalSizeBytes,
+            int pageSize
     ) {
         this.catalogLockWait = Objects.requireNonNull(catalogLockWait, "catalogLockWait");
         this.checkpointStrategyKind = Objects.requireNonNull(checkpointStrategyKind, "checkpointStrategyKind");
         this.checkpointTimeout = Objects.requireNonNull(checkpointTimeout, "checkpointTimeout");
         this.checkpointEnabled = checkpointEnabled;
         this.maxWalSizeBytes = maxWalSizeBytes;
+        this.pageSize = pageSize;
     }
 
     /**
@@ -84,7 +97,8 @@ public final class ServerEnvironment {
                 false,
                 DEFAULT_CHECKPOINT_STRATEGY,
                 Duration.ofSeconds(DEFAULT_CHECKPOINT_TIMEOUT_SECONDS),
-                DEFAULT_MAX_WAL_SIZE_BYTES
+                DEFAULT_MAX_WAL_SIZE_BYTES,
+                DEFAULT_PAGE_SIZE
         );
     }
 
@@ -125,12 +139,15 @@ public final class ServerEnvironment {
                     MAX_WAL_SIZE_BYTES + " must be at least 1, got " + maxWalSize
             );
         }
+        int pageSize = resolveInt(PAGE_SIZE, values, DEFAULT_PAGE_SIZE);
+        requireValidPageSize(pageSize);
         return new ServerEnvironment(
                 Duration.ofSeconds(lockWaitSeconds),
                 checkpointEnabled,
                 strategyKind,
                 Duration.ofSeconds(timeoutSeconds),
-                maxWalSize
+                maxWalSize,
+                pageSize
         );
     }
 
@@ -155,6 +172,15 @@ public final class ServerEnvironment {
     }
 
     /**
+     * Byte length of each heap/index page ({@code .ibd} / {@code .idx}).
+     * Wired into {@link DefaultPhysicalStorage}; changing it on a non-empty data
+     * directory requires matching on-disk pages or startup validation fails.
+     */
+    public int pageSize() {
+        return pageSize;
+    }
+
+    /**
      * Plug exactly one automatic strategy for the scheduler.
      * Change {@link #CHECKPOINT_STRATEGY} in {@code server.env} to switch implementations —
      * do not OR timeout and size in one class (that would abandon the Strategy split).
@@ -165,6 +191,24 @@ public final class ServerEnvironment {
             case TIMEOUT -> new TimeoutCheckpointStrategy(checkpointTimeout);
             case WAL_SIZE -> new WalSizeCheckpointStrategy(physicalStorage, maxWalSizeBytes);
         };
+    }
+
+    /**
+     * lower/upper are u16 offsets, so page size must fit in 16 bits and leave room
+     * for the header plus at least one slot directory entry.
+     */
+    static void requireValidPageSize(int pageSize) {
+        if (pageSize < PageLayout.MIN_PAGE_SIZE) {
+            throw new IllegalArgumentException(
+                    PAGE_SIZE + " must be at least " + PageLayout.MIN_PAGE_SIZE
+                            + " (header + meta fields), got " + pageSize
+            );
+        }
+        if (pageSize > 0xFFFF) {
+            throw new IllegalArgumentException(
+                    PAGE_SIZE + " must fit in u16 page offsets, got " + pageSize
+            );
+        }
     }
 
     private static void ensureDefaultsFile(Path envFile) {

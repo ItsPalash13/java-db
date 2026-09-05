@@ -9,7 +9,9 @@ public enum PageType {
     HEAP((byte) 1),
     INDEX_META((byte) 2),
     INDEX_LEAF((byte) 3),
-    INDEX_INTERNAL((byte) 4);
+    INDEX_INTERNAL((byte) 4),
+    /** Page 0 of {@code .ibd}: stamps {@code PAGE_SIZE}; heap rows start at page 1. */
+    HEAP_META((byte) 5);
 
     private final byte code;
 

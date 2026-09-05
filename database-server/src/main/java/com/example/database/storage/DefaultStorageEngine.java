@@ -8,6 +8,7 @@ import com.example.database.storage.catalog.DefaultCatalogManager;
 import com.example.database.storage.checkpoint.CheckpointScheduler;
 import com.example.database.storage.lock.DefaultLockManager;
 import com.example.database.storage.lock.LockManager;
+import com.example.database.storage.page.PageFileValidator;
 import com.example.database.storage.physical.DefaultPhysicalStorage;
 import com.example.database.storage.physical.PhysicalStorage;
 import com.example.database.storage.index.IndexStore;
@@ -59,7 +60,8 @@ public final class DefaultStorageEngine implements StorageEngine {
     public DefaultStorageEngine(DataDirectory dataDirectory, ServerEnvironment environment) {
         this.dataDirectory = Objects.requireNonNull(dataDirectory, "dataDirectory");
         Objects.requireNonNull(environment, "environment");
-        this.physicalStorage = new DefaultPhysicalStorage(dataDirectory);
+        // PAGE_SIZE from server.env / process env — must match existing .ibd/.idx images.
+        this.physicalStorage = new DefaultPhysicalStorage(dataDirectory, environment.pageSize());
         this.catalogManager = new DefaultCatalogManager(physicalStorage);
         this.walManager = new DefaultWALManager(physicalStorage);
         this.bufferPool = new DefaultBufferPool(physicalStorage);
@@ -159,6 +161,8 @@ public final class DefaultStorageEngine implements StorageEngine {
             return;
         }
         dataDirectory.ensureExists();
+        // Fail fast if PAGE_SIZE does not match on-disk .ibd / .idx page images.
+        PageFileValidator.validateAll(dataDirectory, physicalStorage);
         // Disk snapshot first; WAL then fills any committed intent that never landed in catalog.json.
         // Replay also reads wal.checkpoint so maxTxnId survives a prior truncate.
         catalogManager.load();

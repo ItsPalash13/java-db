@@ -18,6 +18,11 @@ public final class PageLayout {
 
     public static final int HEADER_SIZE = 24;
     public static final int SLOT_SIZE = 4;
+    /**
+     * Smallest page that fits the shared header plus the index meta pageSize stamp.
+     * One engine {@code PAGE_SIZE} must satisfy heap and index layouts.
+     */
+    public static final int MIN_PAGE_SIZE = HEADER_SIZE + Integer.BYTES;
 
     public static final int OFF_MAGIC = 0;
     public static final int OFF_PAGE_TYPE = 2;

@@ -57,6 +57,7 @@ public final class FileIndexStore implements IndexStore {
             try {
                 IndexMetaPage meta = IndexMetaPage.wrap(metaFrame.data());
                 meta.setRoot(-1, 0);
+                meta.setPageSize(pageSize);
                 bufferPool.markDirty(metaFrame);
             } finally {
                 bufferPool.unlatch(metaFrame);
@@ -1117,6 +1118,19 @@ public final class FileIndexStore implements IndexStore {
     private MetaView readMeta(String file) {
         return withShared(file, 0, frame -> {
             IndexMetaPage meta = IndexMetaPage.wrap(frame.data());
+            int stamped = meta.pageSize();
+            // Older images may have zero in the new field — treat as "unset" and require a write.
+            if (stamped == 0) {
+                throw new IndexStoreException(
+                        "index file " + file + " missing stamped PAGE_SIZE; recreate the index"
+                );
+            }
+            if (stamped != pageSize) {
+                throw new IndexStoreException(
+                        "index file " + file + " stamped PAGE_SIZE " + stamped
+                                + " does not match server PAGE_SIZE " + pageSize
+                );
+            }
             return new MetaView(meta.rootPageId(), meta.height());
         });
     }

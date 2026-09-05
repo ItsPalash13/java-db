@@ -1,6 +1,7 @@
 package com.example.database.storage.physical;
 
 import com.example.database.storage.DataDirectory;
+import com.example.database.storage.page.PageLayout;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -37,8 +38,14 @@ public final class DefaultPhysicalStorage implements PhysicalStorage {
 
     public DefaultPhysicalStorage(DataDirectory dataDirectory, int pageSize) {
         Objects.requireNonNull(dataDirectory, "dataDirectory");
-        if (pageSize < 1) {
-            throw new IllegalArgumentException("pageSize must be >= 1");
+        int min = PageLayout.MIN_PAGE_SIZE;
+        if (pageSize < min) {
+            throw new IllegalArgumentException(
+                    "pageSize must be at least " + min + ", got " + pageSize
+            );
+        }
+        if (pageSize > 0xFFFF) {
+            throw new IllegalArgumentException("pageSize must fit in u16: " + pageSize);
         }
         // StorageEngine owns DataDirectory lifecycle; we only keep the root path.
         this.root = dataDirectory.root();

@@ -632,6 +632,29 @@ classDiagram
     class PageType {
         <<enumeration>>
         HEAP
+        HEAP_META
+        INDEX_META
+        INDEX_LEAF
+        INDEX_INTERNAL
+    }
+
+    class HeapMetaPage {
+        <<concrete>>
+        +createEmpty(int pageId, int pageSize) HeapMetaPage
+        +wrap(byte[] data) HeapMetaPage
+        +pageSize() int
+        +setPageSize(int pageSize) void
+    }
+
+    class IndexMetaPage {
+        <<concrete>>
+        +createEmpty(int pageId, int pageSize) IndexMetaPage
+        +wrap(byte[] data) IndexMetaPage
+        +rootPageId() int
+        +height() int
+        +pageSize() int
+        +setRoot(int rootPageId, int height) void
+        +setPageSize(int pageSize) void
     }
 
     class Rid {
@@ -962,7 +985,13 @@ classDiagram
         +catalogLockWait() Duration
         +checkpointEnabled() boolean
         +checkpointStrategyKind() CheckpointStrategyKind
+        +pageSize() int
         +createCheckpointStrategy(PhysicalStorage) CheckpointStrategy
+    }
+
+    class PageFileValidator {
+        <<concrete>>
+        +validateAll(DataDirectory dataDirectory, PhysicalStorage storage) void
     }
 
     class QueryLexer {
@@ -1383,6 +1412,7 @@ classDiagram
     HeapPage ..> RowCodec : encode/decode
     HeapPage ..> PageLayout : constants
     HeapPage ..> PageType : HEAP
+    HeapMetaPage ..> PageType : HEAP_META
     HeapPage ..> Tuple : read/scan
     RowCodec ..> ColumnType
     RowCodec ..> Tuple
@@ -1408,6 +1438,14 @@ classDiagram
     CheckpointScheduler --> LockManager
     CheckpointScheduler --> WALManager : checkpoint
     ServerEnvironment ..> CheckpointStrategy : createCheckpointStrategy
+    DefaultStorageEngine ..> PageFileValidator : start validates .ibd/.idx
+    PageFileValidator ..> PhysicalStorage : read pages
+    PageFileValidator ..> PageLayout : header constants
+    PageFileValidator ..> PageType : type byte
+    PageFileValidator ..> HeapMetaPage : .ibd page 0 stamp
+    PageFileValidator ..> IndexMetaPage : .idx page 0 stamp
+    FileTableStore ..> HeapMetaPage : ensure page 0
+    FileIndexStore ..> IndexMetaPage : pageSize stamp
     WalRecord --> WalOp
     DefaultStorageEngine --> TransactionManager : owns
     DefaultStorageEngine --> LockManager : owns

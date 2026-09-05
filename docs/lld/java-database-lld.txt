@@ -633,7 +633,31 @@ constants for slotted page bytes
 <<enumeration>>
 PageType
 HEAP (= 1)
-    // INDEX pageType arrives with B+ tree (Phase 5)
+INDEX_META (= 2)
+INDEX_LEAF (= 3)
+INDEX_INTERNAL (= 4)
+HEAP_META (= 5)
+    // .ibd page 0 = HEAP_META (stamps PAGE_SIZE); heap rows start at page 1
+    // .idx page 0 = INDEX_META (root, height, PAGE_SIZE stamp); tree from page 1
+
+
+<<concrete>>
+HeapMetaPage
+page 0 of .ibd — durable PAGE_SIZE stamp (same pageSize as data pages)
++ createEmpty(pageId, pageSize): HeapMetaPage
++ wrap(data: byte[]): HeapMetaPage
++ pageSize(): int
++ setPageSize(pageSize: int): void
+
+
+<<concrete>>
+IndexMetaPage
+page 0 of .idx — root, height, PAGE_SIZE stamp
++ createEmpty(pageId, pageSize): IndexMetaPage
++ wrap(data: byte[]): IndexMetaPage
++ rootPageId() / height() / pageSize(): int
++ setRoot(rootPageId, height): void
++ setPageSize(pageSize: int): void
 
 
 <<record>>
@@ -642,6 +666,7 @@ physical heap address (not a lock key)
 + pageId: int
 + slotId: int
     // disk offset of page = pageId × pageSize
+    // pageId 0 is HEAP_META — row Rids use pageId >= 1
 
 
 <<interface>>
@@ -1071,7 +1096,8 @@ LaunchConfig
 ServerEnvironment
 + ENV_FILE_NAME: String
 + CATALOG_LOCK_WAIT_SECONDS / CHECKPOINT_ENABLED / CHECKPOINT_STRATEGY
-+ CHECKPOINT_TIMEOUT_SECONDS / MAX_WAL_SIZE_BYTES
++ CHECKPOINT_TIMEOUT_SECONDS / MAX_WAL_SIZE_BYTES / PAGE_SIZE
++ DEFAULT_PAGE_SIZE = 16 KiB
 + defaults(): ServerEnvironment   // checkpointEnabled=false (tests)
 + load(dataDirectory: DataDirectory): ServerEnvironment
 + catalogLockWait(): Duration
@@ -1079,8 +1105,16 @@ ServerEnvironment
 + checkpointStrategyKind(): CheckpointStrategyKind
 + checkpointTimeout(): Duration
 + maxWalSizeBytes(): long
++ pageSize(): int                 // wired into DefaultPhysicalStorage
 + createCheckpointStrategy(physicalStorage: PhysicalStorage): CheckpointStrategy
     // plugs timeout OR wal_size — one strategy for the scheduler
+
+
+<<concrete>>
+PageFileValidator
++ validateAll(dataDirectory: DataDirectory, storage: PhysicalStorage): void
+    // start(): every .ibd/.idx length % pageSize == 0 and headers decode
+    // throws PhysicalStorageException if PAGE_SIZE does not match on-disk images
 
 
 <<interface>>
@@ -1394,7 +1428,7 @@ database-client is a separate Maven module: DatabaseClient REPL over the same le
 
 Catalog (Phase 1.1–1.3):
 CatalogManager is a StorageEngine submodule and owns CatalogStore.
-DefaultStorageEngine constructs PhysicalStorage, DefaultCatalogManager, DefaultWALManager, FileIndexStore, DefaultUndoManager(indexStore), DefaultTransactionManager(wal, undo), DefaultLockManager (DETECT_RESOLVE), CheckpointScheduler (strategy from ServerEnvironment + BufferPool), DefaultBufferPool (WAL flush gate + IndexPageWal hook), IndexMaintainer (logical INDEX_* WAL), and UndoableTableStore over FileTableStore (logical row WAL + page LSN). start() loads catalog, catalog replay, DML redo, IndexPageWal.replay, loads index key types, seeds next txnId, starts scheduler if enabled. stop() flushes dirty buffer-pool pages then stops the scheduler.
+DefaultStorageEngine constructs PhysicalStorage(pageSize from ServerEnvironment), DefaultCatalogManager, DefaultWALManager, FileIndexStore, DefaultUndoManager(indexStore), DefaultTransactionManager(wal, undo), DefaultLockManager (DETECT_RESOLVE), CheckpointScheduler (strategy from ServerEnvironment + BufferPool), DefaultBufferPool (WAL flush gate + IndexPageWal hook), IndexMaintainer (logical INDEX_* WAL), and UndoableTableStore over FileTableStore (logical row WAL + page LSN). start() runs PageFileValidator on all .ibd/.idx, then loads catalog, catalog replay, DML redo, IndexPageWal.replay, loads index key types, seeds next txnId, starts scheduler if enabled. stop() flushes dirty buffer-pool pages then stops the scheduler.
 start() calls catalogManager.load() — the engine does not touch catalog files.
 createTable assigns ids and writes data/<db>/<table>/catalog.json. Restart: new engine, start, getTable("shop","users").
 CREATE DATABASE creates data/<name>/; DROP DATABASE removes an empty directory (fails if tables remain). load() lists those directories and per-table catalogs.

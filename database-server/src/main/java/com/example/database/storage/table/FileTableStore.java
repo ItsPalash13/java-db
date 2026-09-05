@@ -9,14 +9,17 @@ import com.example.database.storage.catalog.ColumnMetadata;
 import com.example.database.storage.catalog.ColumnType;
 import com.example.database.storage.catalog.TableMetadata;
 import com.example.database.storage.index.IndexMaintainer;
+import com.example.database.storage.page.HeapMetaPage;
 import com.example.database.storage.page.HeapPage;
 import com.example.database.storage.page.InMemoryRidMap;
 import com.example.database.storage.page.PageLayout;
 import com.example.database.storage.page.PageLayoutException;
+import com.example.database.storage.page.PageType;
 import com.example.database.storage.page.Rid;
 import com.example.database.storage.page.RidMap;
 import com.example.database.storage.page.RowCodec;
 import com.example.database.storage.physical.PhysicalStorage;
+import com.example.database.storage.physical.PhysicalStorageException;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -28,7 +31,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Page-backed heap store: one {@code .ibd} per table, rows in slotted {@link HeapPage}s
- * through {@link BufferPool}. Logical {@code rowId} maps to {@link Rid} in RAM
+ * through {@link BufferPool}. Page 0 is {@link HeapMetaPage} (stamps {@code PAGE_SIZE});
+ * row pages start at page 1. Logical {@code rowId} maps to {@link Rid} in RAM
  * ({@link RidMap}); restart rebuilds the map by scanning live slots.
  * <p>
  * Phase 6: on DML, appends logical WAL then stamps page LSN before {@code markDirty}.
@@ -104,6 +108,7 @@ public final class FileTableStore implements TableStore {
             if (!physicalStorage.exists(file)) {
                 physicalStorage.create(file);
             }
+            ensureHeapMeta(file);
             state.scannedFromDisk = true;
         }
     }
@@ -323,6 +328,55 @@ public final class FileTableStore implements TableStore {
             physicalStorage.create(file);
             state.scannedFromDisk = true;
         }
+        ensureHeapMeta(file);
+    }
+
+    /**
+     * Page 0 must be {@link HeapMetaPage} with stamped {@code PAGE_SIZE}.
+     * Creates it when the {@code .ibd} is still empty.
+     */
+    private void ensureHeapMeta(String file) {
+        long length = physicalStorage.byteLength(file);
+        if (length == 0) {
+            BufferFrame frame = bufferPool.newPage(file, PageType.HEAP_META);
+            try {
+                bufferPool.latchExclusive(frame);
+                try {
+                    // createEmpty already stamped pageSize; wrap confirms type.
+                    HeapMetaPage.wrap(frame.data());
+                    bufferPool.markDirty(frame);
+                } finally {
+                    bufferPool.unlatch(frame);
+                }
+            } finally {
+                bufferPool.unpin(frame);
+            }
+            return;
+        }
+        if (length % pageSize != 0) {
+            throw new PhysicalStorageException(
+                    "heap file " + file + " length " + length
+                            + " is not a multiple of PAGE_SIZE " + pageSize
+            );
+        }
+        BufferFrame frame = bufferPool.pin(new PageId(file, 0));
+        try {
+            bufferPool.latchShared(frame);
+            try {
+                HeapMetaPage meta = HeapMetaPage.wrap(frame.data());
+                int stamped = meta.pageSize();
+                if (stamped != pageSize) {
+                    throw new PhysicalStorageException(
+                            "heap file " + file + " stamped PAGE_SIZE " + stamped
+                                    + " does not match server PAGE_SIZE " + pageSize
+                    );
+                }
+            } finally {
+                bufferPool.unlatch(frame);
+            }
+        } finally {
+            bufferPool.unpin(frame);
+        }
     }
 
     private void ensureLoaded(String database, String table, HeapState state) {
@@ -334,11 +388,13 @@ public final class FileTableStore implements TableStore {
             state.scannedFromDisk = true;
             return;
         }
+        ensureHeapMeta(file);
         ColumnType[] types = columnTypes(database, table);
         long fileLength = physicalStorage.byteLength(file);
         int pageCount = (int) (fileLength / pageSize);
         long maxRowId = 0;
-        for (int pageId = 0; pageId < pageCount; pageId++) {
+        // Page 0 is HEAP_META — scan only HEAP data pages.
+        for (int pageId = 1; pageId < pageCount; pageId++) {
             PageId pageKey = new PageId(file, pageId);
             BufferFrame frame = bufferPool.pin(pageKey);
             try {
@@ -362,7 +418,7 @@ public final class FileTableStore implements TableStore {
             }
         }
         state.nextRowId = maxRowId + 1;
-        state.lastPageId = pageCount > 0 ? pageCount - 1 : -1;
+        state.lastPageId = pageCount > 1 ? pageCount - 1 : -1;
         state.scannedFromDisk = true;
     }
 
@@ -371,7 +427,7 @@ public final class FileTableStore implements TableStore {
         long fileLength = physicalStorage.byteLength(file);
         int pageCount = (int) (fileLength / pageSize);
         List<Tuple> rows = new ArrayList<>();
-        for (int pageId = 0; pageId < pageCount; pageId++) {
+        for (int pageId = 1; pageId < pageCount; pageId++) {
             PageId pageKey = new PageId(file, pageId);
             BufferFrame frame = bufferPool.pin(pageKey);
             try {

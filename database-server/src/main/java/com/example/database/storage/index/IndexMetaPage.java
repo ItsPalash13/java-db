@@ -9,7 +9,7 @@ import java.nio.ByteOrder;
 import java.util.Objects;
 
 /**
- * Page 0 of every {@code .idx} file: durable root pointer and tree height.
+ * Page 0 of every {@code .idx} file: durable root pointer, tree height, and {@code PAGE_SIZE}.
  * Not a B+ tree node — data pages start at page 1.
  */
 public final class IndexMetaPage {
@@ -21,7 +21,7 @@ public final class IndexMetaPage {
     }
 
     public static IndexMetaPage createEmpty(int pageId, int pageSize) {
-        if (pageSize < PageLayout.HEADER_SIZE + 8) {
+        if (pageSize < PageLayout.HEADER_SIZE + IndexPageLayout.META_PAGE_SIZE_BYTES) {
             throw new IllegalArgumentException("pageSize too small for index meta: " + pageSize);
         }
         byte[] bytes = new byte[pageSize];
@@ -31,11 +31,14 @@ public final class IndexMetaPage {
         buf.put(PageLayout.OFF_FLAGS, (byte) 0);
         buf.putInt(PageLayout.OFF_PAGE_ID, pageId);
         buf.putShort(PageLayout.OFF_SLOT_COUNT, (short) 0);
-        buf.putShort(PageLayout.OFF_LOWER, (short) PageLayout.HEADER_SIZE);
+        // lower past the pageSize stamp (root/height live in the LSN-reserved header region).
+        int lower = PageLayout.HEADER_SIZE + IndexPageLayout.META_PAGE_SIZE_BYTES;
+        buf.putShort(PageLayout.OFF_LOWER, (short) lower);
         buf.putShort(PageLayout.OFF_UPPER, (short) pageSize);
         buf.putShort(PageLayout.OFF_PAD, (short) 0);
         buf.putInt(IndexPageLayout.OFF_META_ROOT, -1);
         buf.putInt(IndexPageLayout.OFF_META_HEIGHT, 0);
+        buf.putInt(IndexPageLayout.OFF_META_PAGE_SIZE, pageSize);
         return new IndexMetaPage(bytes);
     }
 
@@ -62,10 +65,22 @@ public final class IndexMetaPage {
         return buf().getInt(IndexPageLayout.OFF_META_HEIGHT);
     }
 
+    /** Page size this {@code .idx} was written with (must match server {@code PAGE_SIZE}). */
+    public int pageSize() {
+        return buf().getInt(IndexPageLayout.OFF_META_PAGE_SIZE);
+    }
+
     public void setRoot(int rootPageId, int height) {
         ByteBuffer header = buf();
         header.putInt(IndexPageLayout.OFF_META_ROOT, rootPageId);
         header.putInt(IndexPageLayout.OFF_META_HEIGHT, height);
+    }
+
+    public void setPageSize(int pageSize) {
+        if (pageSize < PageLayout.HEADER_SIZE + IndexPageLayout.META_PAGE_SIZE_BYTES || pageSize > 0xFFFF) {
+            throw new PageLayoutException("invalid stamped pageSize: " + pageSize);
+        }
+        buf().putInt(IndexPageLayout.OFF_META_PAGE_SIZE, pageSize);
     }
 
     private void validateHeader() {

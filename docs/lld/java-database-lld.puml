@@ -581,6 +581,17 @@ class PageLayout <<concrete>> {
 
 enum PageType {
   HEAP
+  HEAP_META
+  INDEX_META
+  INDEX_LEAF
+  INDEX_INTERNAL
+}
+
+class HeapMetaPage <<concrete>> {
+  +{static} createEmpty(pageId, pageSize): HeapMetaPage
+  +{static} wrap(data: byte[]): HeapMetaPage
+  +pageSize(): int
+  +setPageSize(pageSize: int): void
 }
 
 class Rid <<record>> {
@@ -837,7 +848,12 @@ class ServerEnvironment <<concrete>> {
   +catalogLockWait(): Duration
   +checkpointEnabled(): boolean
   +checkpointStrategyKind(): CheckpointStrategyKind
+  +pageSize(): int
   +createCheckpointStrategy(physicalStorage: PhysicalStorage): CheckpointStrategy
+}
+
+class PageFileValidator <<concrete>> {
+  +{static} validateAll(dataDirectory: DataDirectory, storage: PhysicalStorage): void
 }
 
 interface QueryLexer {
@@ -1208,6 +1224,12 @@ CheckpointScheduler --> CheckpointStrategy
 CheckpointScheduler --> LockManager
 CheckpointScheduler --> WALManager : checkpoint
 ServerEnvironment ..> CheckpointStrategy : createCheckpointStrategy
+DefaultStorageEngine ..> PageFileValidator : start validates .ibd/.idx
+PageFileValidator ..> PhysicalStorage : read pages
+PageFileValidator ..> PageLayout : header constants
+PageFileValidator ..> PageType : type byte
+PageFileValidator ..> HeapMetaPage : .ibd page 0 stamp
+FileTableStore ..> HeapMetaPage : ensure page 0
 WalRecord --> WalOp
 DefaultStorageEngine --> TransactionManager : owns
 DefaultStorageEngine --> LockManager : owns

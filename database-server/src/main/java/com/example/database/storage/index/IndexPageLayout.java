@@ -12,6 +12,13 @@ public final class IndexPageLayout {
     public static final int OFF_META_ROOT = PageLayout.OFF_LSN_RESERVED;
     /** Meta page 0: tree height (0 = empty, 1 = single leaf root). */
     public static final int OFF_META_HEIGHT = PageLayout.OFF_LSN_RESERVED + Integer.BYTES;
+    /**
+     * Meta page 0: durable {@code PAGE_SIZE} for this {@code .idx} (must match server env).
+     * Lives just past the 24-byte shared header (root/height use the LSN-reserved region).
+     */
+    public static final int OFF_META_PAGE_SIZE = PageLayout.HEADER_SIZE;
+    /** Bytes after the shared header occupied by the pageSize stamp. */
+    public static final int META_PAGE_SIZE_BYTES = Integer.BYTES;
 
     /** Leaf page: next sibling leaf page id (-1 = none). */
     public static final int OFF_LEAF_NEXT = PageLayout.OFF_LSN_RESERVED;
